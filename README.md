@@ -2,6 +2,8 @@
 
 **Programmatic .gcdump capture for .NET applications.**
 
+[![Memory.Introspect](https://img.shields.io/nuget/v/Memory.Introspect.svg?style=flat-square)](https://www.nuget.org/packages/Memory.Introspect/)
+
 `MemoryIntrospector` is a lightweight C\# library that wraps the functionality of the official `dotnet-gcdump` tool. It allows developers to capture garbage collection (GC) dumps and memory graphs directly from within their code, without needing to shell out to the CLI or manage external processes.
 
 ## 🚀 Why use this?
@@ -17,6 +19,10 @@ Normally, capturing a `.gcdump` requires running the `dotnet-gcdump` command-lin
 -----
 
 ## 📦 Installation
+
+[![Memory.Introspect](https://img.shields.io/nuget/v/Memory.Introspect.svg?style=flat-square)](https://www.nuget.org/packages/Memory.Introspect/)
+
+Memory.Introspect is available as a [NuGet package](https://www.nuget.org/packages/Memory.Introspect/)
 
 ```bash
 dotnet add package Memory.Introspect
