@@ -1,4 +1,4 @@
-﻿# MemoryIntrospector
+﻿# Memory Introspect
 
 **Programmatic .gcdump capture for .NET applications.**
 
