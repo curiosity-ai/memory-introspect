@@ -66,7 +66,7 @@ logger.LogInformation("Finished creating gcdump file");
 
 The resulting `.gcdump` file can be opened in:
 
-  * **Visual Studio+**
+  * **Visual Studio**
   * **[PerfView](https://github.com/microsoft/perfview)**
 -----
 
