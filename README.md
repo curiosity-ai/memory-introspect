@@ -4,13 +4,13 @@
 
 [![Memory.Introspect](https://img.shields.io/nuget/v/Memory.Introspect.svg?style=flat-square)](https://www.nuget.org/packages/Memory.Introspect/)
 
-`MemoryIntrospector` is a lightweight C\# library that wraps the functionality of the official `dotnet-gcdump` tool. It allows developers to capture garbage collection (GC) dumps and memory graphs directly from within their code, without needing to shell out to the CLI or manage external processes.
+`Memory.Introspect` is a lightweight C\# library that wraps the functionality of the official `dotnet-gcdump` tool. It allows developers to capture garbage collection (GC) dumps and memory graphs directly from within their code, without needing to shell out to the CLI or manage external processes.
 
 ## 🚀 Why use this?
 
 Normally, capturing a `.gcdump` requires running the `dotnet-gcdump` command-line tool against a Process ID (PID). While effective for ad-hoc debugging, it is difficult to automate within an application.
 
-**MemoryIntrospector allows you to:**
+**Memory.Introspect allows you to:**
 
   * **Self-Monitor:** Have an application trigger its own memory dump to analyze memory leaks.
   * **Automate:** Integrate memory capturing into integration tests or CI/CD pipelines.
@@ -46,11 +46,11 @@ using Microsoft.Extensions.Logging;
 int currentPid    = Process.GetCurrentProcess().Id;
 
 var loggerFactory = LoggerFactory.Create(f => f.AddConsole());
-var logger = loggerFactory.CreateLogger("MemoryIntrospector");
+var logger = loggerFactory.CreateLogger("Memory.Introspect");
 
 logger.LogInformation("Starting creating gcdump file from process {0}", currentPid);
 
-var result = await MemoryIntrospector.Create(new() { Logger = logger, Verbose = true }).CollectMemoryGraphAsync(currentPid);
+var result = await Memory.Introspect.Create(new() { Logger = logger, Verbose = true }).CollectMemoryGraphAsync(currentPid);
 
 if (result.Success)
 {
