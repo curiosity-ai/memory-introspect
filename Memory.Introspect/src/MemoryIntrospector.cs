@@ -44,7 +44,7 @@ namespace Memory.Introspect
             {
                 await Task.Yield();
 
-                if (!EventPipeDotNetHeapDumper.DumpFromEventPipe(cancellationToken, processId, _options.DiagnosticPort, memoryGraph, GetTextWriter(), (int)_options.Timeout.TotalSeconds, heapInfo, _options.MaxNodeCount, response))
+                if (!EventPipeDotNetHeapDumper.DumpFromEventPipe(cancellationToken, processId, _options.DiagnosticPort, memoryGraph, GetTextWriter(), (int)_options.Timeout.TotalSeconds, heapInfo, _options.MaxNodeCount, _options.CircularBufferSizeInMB, response))
                 {
                     memoryGraph = null;
                 }
@@ -92,6 +92,7 @@ namespace Memory.Introspect
         public bool Verbose { get; set; }
         public bool ExpectLargeGraph { get; set; }
         public int MaxNodeCount { get; set; }
+        public int CircularBufferSizeInMB { get; set; }
         public ILogger Logger { get; set;  }
         public LogLevel LogLevel { get; set; } = LogLevel.Information;
         public MemoryIntrospectorOptions Default()
@@ -102,6 +103,7 @@ namespace Memory.Introspect
                 ExpectLargeGraph = false,
                 Verbose = true,
                 DiagnosticPort = null,
+                CircularBufferSizeInMB = 1024,
                 Timeout = TimeSpan.FromSeconds(30)
             };
         }

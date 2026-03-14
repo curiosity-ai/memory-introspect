@@ -116,7 +116,7 @@ namespace Microsoft.Diagnostics.Tools.GCDump
         /// <param name="timeout"></param>
         /// <param name="dotNetInfo"></param>
         /// <returns></returns>
-        public static bool DumpFromEventPipe(CancellationToken ct, int processId, string diagnosticPort, MemoryGraph memoryGraph, TextWriter log, int timeout, DotNetHeapInfo dotNetInfo, int maxNodeCount, MemoryGraphResult responseHolder)
+        public static bool DumpFromEventPipe(CancellationToken ct, int processId, string diagnosticPort, MemoryGraph memoryGraph, TextWriter log, int timeout, DotNetHeapInfo dotNetInfo, int maxNodeCount, int circularBufferSizeInMB, MemoryGraphResult responseHolder)
         {
             DateTime start = DateTime.Now;
             Func<TimeSpan> getElapsed = () => DateTime.Now - start;
@@ -157,7 +157,7 @@ namespace Microsoft.Diagnostics.Tools.GCDump
                 // Start the providers and trigger the GCs.
                 log.WriteLine("{0,5:n1}s: Requesting a .NET Heap Dump", getElapsed().TotalSeconds);
 
-                using EventPipeSessionController gcDumpSession = new(processId, diagnosticPort, new List<EventPipeProvider> {
+                using EventPipeSessionController gcDumpSession = new(processId, diagnosticPort, circularBufferSizeInMB, new List<EventPipeProvider> {
                     new("Microsoft-Windows-DotNETRuntime", EventLevel.Verbose, (long)(ClrTraceEventParser.Keywords.GCHeapSnapshot))
                 });
                 log.WriteLine("{0,5:n1}s: gcdump EventPipe Session started", getElapsed().TotalSeconds);
@@ -330,7 +330,7 @@ namespace Microsoft.Diagnostics.Tools.GCDump
 
         public bool UseWildcardProcessId => _diagnosticPort != null;
 
-        public EventPipeSessionController(int pid, string diagnosticPort, List<EventPipeProvider> providers, bool requestRundown = true)
+        public EventPipeSessionController(int pid, string diagnosticPort, int circularBufferSizeInMB, List<EventPipeProvider> providers, bool requestRundown = true)
         {
             if (string.IsNullOrEmpty(diagnosticPort))
             {
@@ -366,7 +366,7 @@ namespace Microsoft.Diagnostics.Tools.GCDump
                 _client = new DiagnosticsClient(pid);
             }
 
-            _session = _client.StartEventPipeSession(providers, requestRundown, 1024);
+            _session = _client.StartEventPipeSession(providers, requestRundown, circularBufferSizeInMB);
             _source = new EventPipeEventSource(_session.EventStream);
         }
 
