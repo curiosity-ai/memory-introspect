@@ -12,6 +12,20 @@ namespace Memory.Introspect
     {
         private readonly MemoryIntrospectorOptions _options;
 
+        public Task<int> DumpAsync(int pid, string targetPath, Memory.Introspect.Dumper.CollectionType collectionType)
+        {
+            var task = Task.Run(() =>
+            {
+                var dumper = new Memory.Introspect.Dumper();
+                var stdOut = GetTextWriter();
+                var stdErr = GetTextWriter();
+
+                return dumper.Collect(stdOut, stdErr, pid, targetPath, _options.Verbose, false, collectionType, null, _options.DiagnosticPort);
+            });
+
+            return task;
+        }
+
         private MemoryIntrospector(MemoryIntrospectorOptions options)
         {
             _options = options;

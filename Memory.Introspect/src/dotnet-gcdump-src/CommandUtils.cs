@@ -4,8 +4,8 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using Microsoft.Diagnostics.NETCore.Client;
-using Microsoft.Diagnostics.Tools;
+using Memory.Introspect.Diagnostics.NETCore.Client;
+using Memory.Introspect;
 
 namespace Microsoft.Internal.Common.Utils
 {
