@@ -2,9 +2,9 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
-using Microsoft.Internal.Common.Utils;
+using Memory.Introspect;
 
-namespace Microsoft.Diagnostics.Tools
+namespace Memory.Introspect
 {
     // This is an exception whose error message is intended to be displayed
     // to the user an error on the command line
@@ -19,8 +19,8 @@ namespace Microsoft.Diagnostics.Tools
     // contextualized error messages, don't use this type.
     internal sealed class DiagnosticToolException : Exception
     {
-        public ReturnCode ReturnCode { get; }
-        public DiagnosticToolException(string errorMessage, ReturnCode returnCode = ReturnCode.ArgumentError ) : base(errorMessage)
+        public int ReturnCode { get; }
+        public DiagnosticToolException(string errorMessage, int returnCode = 1 ) : base(errorMessage)
         {
             ReturnCode = returnCode;
         }
