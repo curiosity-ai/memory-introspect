@@ -19,7 +19,7 @@ namespace Memory.Introspect
 
         public static MemoryIntrospector Create(MemoryIntrospectorOptions options = null)
         {
-            options ??= new MemoryIntrospectorOptions();
+            options ??= new();
 
             if (options.Timeout.TotalSeconds < 30)
             {
@@ -88,25 +88,13 @@ namespace Memory.Introspect
     public class MemoryIntrospectorOptions
     {
         public string DiagnosticPort { get; set; }
-        public TimeSpan Timeout { get; set; }
-        public bool Verbose { get; set; }
-        public bool ExpectLargeGraph { get; set; }
-        public int MaxNodeCount { get; set; }
-        public int CircularBufferSizeInMB { get; set; }
+        public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(30);
+        public bool Verbose { get; set; } = true;
+        public bool ExpectLargeGraph { get; set; } = false;
+        public int MaxNodeCount { get; set; } = 10_000_000;
+        public int CircularBufferSizeInMB { get; set; } = 1024;
         public ILogger Logger { get; set;  }
         public LogLevel LogLevel { get; set; } = LogLevel.Information;
-        public MemoryIntrospectorOptions Default()
-        {
-            return new MemoryIntrospectorOptions()
-            {
-                MaxNodeCount = 10_000_000,
-                ExpectLargeGraph = false,
-                Verbose = true,
-                DiagnosticPort = null,
-                CircularBufferSizeInMB = 1024,
-                Timeout = TimeSpan.FromSeconds(30)
-            };
-        }
     }
 
     public class MemoryGraphResult

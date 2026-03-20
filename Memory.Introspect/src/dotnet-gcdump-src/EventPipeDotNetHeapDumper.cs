@@ -132,7 +132,7 @@ namespace Microsoft.Diagnostics.Tools.GCDump
                 bool fDone = false;
                 log.WriteLine("{0,5:n1}s: Creating type table flushing task", getElapsed().TotalSeconds);
 
-                using (EventPipeSessionController typeFlushSession = new(processId, diagnosticPort, new List<EventPipeProvider> {
+                using (EventPipeSessionController typeFlushSession = new(processId, diagnosticPort, circularBufferSizeInMB, new List<EventPipeProvider> {
                     new("Microsoft-DotNETCore-SampleProfiler", EventLevel.Informational)
                 }, false))
                 {
