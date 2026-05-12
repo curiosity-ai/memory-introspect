@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 using Graphs;
+using Memory.Introspect.Trace;
 using Microsoft.Diagnostics.Tools.GCDump;
 using Microsoft.Extensions.Logging;
 
@@ -41,6 +42,22 @@ namespace Memory.Introspect
             }
 
             return new MemoryIntrospector(options);
+        }
+
+        public Task<SamplingProfileResult> CollectSamplingProfileAsync(int processId, TimeSpan duration, CancellationToken cancellationToken = default)
+        {
+            if (duration <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(duration), "Duration must be positive.");
+            }
+
+            return SamplingProfiler.CollectAsync(
+                processId,
+                duration,
+                _options.CircularBufferSizeInMB,
+                _options.DiagnosticPort,
+                GetTextWriter(),
+                cancellationToken);
         }
 
         public async Task<MemoryGraphResult> CollectMemoryGraphAsync(int processId, CancellationToken cancellationToken = default)
