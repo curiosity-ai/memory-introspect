@@ -56,6 +56,7 @@ namespace Memory.Introspect
                 duration,
                 _options.CircularBufferSizeInMB,
                 _options.DiagnosticPort,
+                _options.SamplingExcludedModules,
                 GetTextWriter(),
                 cancellationToken);
         }
@@ -126,6 +127,15 @@ namespace Memory.Introspect
         public int CircularBufferSizeInMB { get; set; } = 1024;
         public ILogger Logger { get; set;  }
         public LogLevel LogLevel { get; set; } = LogLevel.Information;
+
+        /// <summary>
+        /// Module names (assembly simple names) whose frames are excluded from
+        /// <see cref="SamplingProfileResult.TopMethods"/> by default. Useful when running
+        /// the sampling profile against the current process so that the library's own
+        /// frames don't pollute the report. Set to an empty list to disable the default
+        /// filtering.
+        /// </summary>
+        public IReadOnlyList<string> SamplingExcludedModules { get; set; } = SamplingProfiler.DefaultExcludedModules;
     }
 
     public class MemoryGraphResult
