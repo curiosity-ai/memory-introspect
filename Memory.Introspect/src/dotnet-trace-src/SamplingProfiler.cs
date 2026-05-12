@@ -30,6 +30,7 @@ namespace Memory.Introspect.Trace
             TimeSpan duration,
             int circularBufferSizeInMB,
             string diagnosticPort,
+            IReadOnlyList<string> defaultExcludedModules,
             TextWriter log,
             CancellationToken cancellationToken)
         {
@@ -39,6 +40,7 @@ namespace Memory.Introspect.Trace
             {
                 ProcessId = processId,
                 Duration = duration,
+                DefaultExcludedModules = defaultExcludedModules ?? DefaultExcludedModules,
             };
 
             var providers = new List<EventPipeProvider>
@@ -114,13 +116,33 @@ namespace Memory.Introspect.Trace
             return new DiagnosticsClient(processId);
         }
 
-        public static IReadOnlyList<SampledMethod> ComputeTopMethods(byte[] netTraceData, int count, bool inclusive, TextWriter log)
+        // Module names that always get excluded from the top-N report. The frame name format
+        // produced by SampleProfilerThreadTimeComputer is "Module!Namespace.Type.Method(args)",
+        // so excluding "Memory.Introspect" filters out this library's own frames — which is
+        // particularly useful when sampling the current process.
+        public static readonly IReadOnlyList<string> DefaultExcludedModules = new[]
+        {
+            "Memory.Introspect",
+        };
+
+        public static IReadOnlyList<SampledMethod> ComputeTopMethods(
+            byte[] netTraceData,
+            int count,
+            bool inclusive,
+            IReadOnlyList<string> excludedModules,
+            TextWriter log)
         {
             log ??= TextWriter.Null;
             if (netTraceData is null || netTraceData.Length == 0)
             {
                 return Array.Empty<SampledMethod>();
             }
+
+            // Build module prefixes once so we can do a cheap StartsWith check per frame.
+            string[] modulePrefixes = (excludedModules ?? DefaultExcludedModules)
+                .Where(m => !string.IsNullOrWhiteSpace(m))
+                .Select(m => m.EndsWith("!") ? m : m + "!")
+                .ToArray();
 
             string traceFile = Path.Combine(Path.GetTempPath(), $"memory-introspect-sample-{Guid.NewGuid():N}.nettrace");
             File.WriteAllBytes(traceFile, netTraceData);
@@ -155,11 +177,14 @@ namespace Memory.Introspect.Trace
                 foreach (CallTreeNodeBase node in nodes)
                 {
                     if (output.Count >= count) break;
-                    if (unwanted.Any(u => node.Name.Contains(u))) continue;
+                    string name = node.Name;
+                    if (string.IsNullOrEmpty(name)) continue;
+                    if (unwanted.Any(u => name.Contains(u))) continue;
+                    if (IsFromExcludedModule(name, modulePrefixes)) continue;
 
                     output.Add(new SampledMethod
                     {
-                        Name = node.Name,
+                        Name = name,
                         InclusiveMetric = node.InclusiveMetric,
                         ExclusiveMetric = node.ExclusiveMetric,
                         InclusiveMetricPercent = node.InclusiveMetricPercent,
@@ -173,6 +198,18 @@ namespace Memory.Introspect.Trace
                 TryDelete(etlxFile);
                 TryDelete(traceFile);
             }
+        }
+
+        private static bool IsFromExcludedModule(string frameName, string[] modulePrefixes)
+        {
+            for (int i = 0; i < modulePrefixes.Length; i++)
+            {
+                if (frameName.StartsWith(modulePrefixes[i], StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private static void TryDelete(string path)
@@ -200,6 +237,13 @@ namespace Memory.Introspect.Trace
         public TimeSpan Duration { get; internal set; }
         internal byte[] NetTraceData { get; set; }
 
+        /// <summary>
+        /// Module names whose frames will be hidden from <see cref="TopMethods"/> unless an
+        /// explicit list is passed in. Carries the value configured on
+        /// <c>MemoryIntrospectorOptions.SamplingExcludedModules</c> at capture time.
+        /// </summary>
+        public IReadOnlyList<string> DefaultExcludedModules { get; internal set; } = SamplingProfiler.DefaultExcludedModules;
+
         public int TraceSizeInBytes => NetTraceData?.Length ?? 0;
 
         public void SaveToDisk(string fileName)
@@ -211,9 +255,22 @@ namespace Memory.Introspect.Trace
             File.WriteAllBytes(fileName, NetTraceData);
         }
 
-        public IReadOnlyList<SampledMethod> TopMethods(int count = 5, bool inclusive = false, TextWriter log = null)
+        /// <summary>
+        /// Computes the top <paramref name="count"/> sampled methods.
+        /// </summary>
+        /// <param name="excludedModules">Modules (assembly names) to hide from the report.
+        /// Pass null to use <see cref="DefaultExcludedModules"/>; pass an empty list to disable
+        /// module filtering entirely.</param>
+        public IReadOnlyList<SampledMethod> TopMethods(
+            int count = 5,
+            bool inclusive = false,
+            IEnumerable<string> excludedModules = null,
+            TextWriter log = null)
         {
-            return SamplingProfiler.ComputeTopMethods(NetTraceData, count, inclusive, log);
+            IReadOnlyList<string> effective = excludedModules is null
+                ? DefaultExcludedModules
+                : (excludedModules as IReadOnlyList<string>) ?? excludedModules.ToList();
+            return SamplingProfiler.ComputeTopMethods(NetTraceData, count, inclusive, effective, log);
         }
     }
 }

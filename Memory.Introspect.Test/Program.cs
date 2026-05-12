@@ -69,35 +69,66 @@ try
 
     logger.LogInformation("Finished creating memory dump file: {0}", dumpFile);
 
-    logger.LogInformation("Starting sampling profile of process {0}", currentPid);
+    await ReportSampleAsync(introspector, currentPid, "child process", logger);
 
-    var sample = await introspector.CollectSamplingProfileAsync(currentPid, TimeSpan.FromSeconds(5));
-
-    if (sample.Success)
+    // Demonstrate self-sampling: spin up some busy work in this process and sample it.
+    int selfPid = Process.GetCurrentProcess().Id;
+    using var selfStop = new CancellationTokenSource();
+    var selfWork = Task.Run(() => SelfHotLoop(selfStop.Token));
+    try
     {
-        var traceFile = $"{DateTimeOffset.UtcNow:yyyy-MM-dd-HH-mm-ss}-process-{currentPid}.nettrace";
-        sample.SaveToDisk(traceFile);
-        logger.LogInformation("Wrote {0} bytes of trace data to {1}", sample.TraceSizeInBytes, traceFile);
-
-        var top = sample.TopMethods(count: 10, inclusive: false);
-        logger.LogInformation("Top {0} sampled methods (exclusive):", top.Count);
-        foreach (var m in top)
-        {
-            logger.LogInformation("  {0,6:0.00}%  {1}", m.ExclusiveMetricPercent, m.Name);
-        }
+        await ReportSampleAsync(introspector, selfPid, "self", logger);
     }
-    else if (sample.Exception is not null)
+    finally
     {
-        logger.LogError(sample.Exception, "Sampling profile failed");
-    }
-    else
-    {
-        logger.LogWarning("Sampling profile produced no data (cancelled={0})", sample.Cancelled);
+        selfStop.Cancel();
+        try { await selfWork; } catch { }
     }
 }
 finally
 {
     childProcess.Kill();
+}
+
+static void SelfHotLoop(CancellationToken ct)
+{
+    double x = 1.0001;
+    while (!ct.IsCancellationRequested)
+    {
+        for (int i = 0; i < 10_000; i++) x = Math.Sqrt(x + i);
+    }
+}
+
+static async Task ReportSampleAsync(MemoryIntrospector introspector, int pid, string label, ILogger logger)
+{
+    logger.LogInformation("Starting sampling profile of {0} (pid {1})", label, pid);
+
+    var sample = await introspector.CollectSamplingProfileAsync(pid, TimeSpan.FromSeconds(5));
+
+    if (!sample.Success)
+    {
+        if (sample.Exception is not null)
+        {
+            logger.LogError(sample.Exception, "Sampling profile failed for {0}", label);
+        }
+        else
+        {
+            logger.LogWarning("Sampling profile produced no data for {0} (cancelled={1})", label, sample.Cancelled);
+        }
+        return;
+    }
+
+    var traceFile = $"{DateTimeOffset.UtcNow:yyyy-MM-dd-HH-mm-ss}-{label.Replace(' ', '-')}-{pid}.nettrace";
+    sample.SaveToDisk(traceFile);
+    logger.LogInformation("Wrote {0} bytes of trace data to {1}", sample.TraceSizeInBytes, traceFile);
+
+    var top = sample.TopMethods(count: 10, inclusive: false);
+    logger.LogInformation("Top {0} sampled methods for {1} (exclusive, excluding {2}):",
+        top.Count, label, string.Join(", ", sample.DefaultExcludedModules));
+    foreach (var m in top)
+    {
+        logger.LogInformation("  {0,6:0.00}%  {1}", m.ExclusiveMetricPercent, m.Name);
+    }
 }
 
 await Task.Delay(1000); //Give time for the logger to flush
