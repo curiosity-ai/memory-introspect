@@ -328,3 +328,8 @@ ASALocalRun/
 
 # MFractors (Xamarin productivity tool) working folder 
 .mfractor/
+
+# Test program output: captured profiling artefacts
+Memory.Introspect.Test/*.nettrace
+Memory.Introspect.Test/*.gcdump
+Memory.Introspect.Test/*.dmp

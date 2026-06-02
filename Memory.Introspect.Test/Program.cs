@@ -5,11 +5,16 @@ using Microsoft.Extensions.Logging;
 
 if (args.Length > 0 && args[0] == "child")
 {
-    // Busy-loop in a couple of named methods so the sampling profiler has something to capture.
-    var stop = new CancellationTokenSource();
-    AppDomain.CurrentDomain.ProcessExit += (_, _) => stop.Cancel();
+    // Busy-loop in a couple of named methods so the sampling profiler has something to capture,
+    // plus a couple of threads parked on blocking primitives — without the blocked-thread
+    // filter these would dominate the top-N report on a mostly-idle process.
+    var stop  = new CancellationTokenSource();
+    var mres  = new ManualResetEventSlim(false);
+    AppDomain.CurrentDomain.ProcessExit += (_, _) => { stop.Cancel(); mres.Set(); };
     var t1 = Task.Run(() => SpinHot(stop.Token));
     var t2 = Task.Run(() => SpinWarm(stop.Token));
+    var t3 = Task.Run(() => BlockedOnMres(mres, stop.Token));
+    var t4 = Task.Run(() => BlockedOnMonitor(stop.Token));
     try { await Task.Delay(-1, stop.Token); } catch { }
     return;
 
@@ -24,6 +29,18 @@ if (args.Length > 0 && args[0] == "child")
     static void SpinWarm(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested) Thread.SpinWait(1_000_000);
+    }
+    static void BlockedOnMres(ManualResetEventSlim mres, CancellationToken ct)
+    {
+        try { mres.Wait(ct); } catch (OperationCanceledException) { }
+    }
+    static void BlockedOnMonitor(CancellationToken ct)
+    {
+        var gate = new object();
+        lock (gate)
+        {
+            while (!ct.IsCancellationRequested) Monitor.Wait(gate, 1000);
+        }
     }
 }
 

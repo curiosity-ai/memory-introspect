@@ -31,6 +31,7 @@ namespace Memory.Introspect.Trace
             int circularBufferSizeInMB,
             string diagnosticPort,
             IReadOnlyList<string> defaultExcludedModules,
+            IReadOnlyList<string> defaultBlockingMethodPatterns,
             TextWriter log,
             CancellationToken cancellationToken)
         {
@@ -41,6 +42,7 @@ namespace Memory.Introspect.Trace
                 ProcessId = processId,
                 Duration = duration,
                 DefaultExcludedModules = defaultExcludedModules ?? DefaultExcludedModules,
+                DefaultBlockingMethodPatterns = defaultBlockingMethodPatterns ?? DefaultBlockingMethodPatterns,
             };
 
             var providers = new List<EventPipeProvider>
@@ -125,11 +127,63 @@ namespace Memory.Introspect.Trace
             "Memory.Introspect",
         };
 
+        // The .NET sample profiler walks the stacks of all managed threads every sampling
+        // interval, including ones that are currently parked in a blocking wait. Without this
+        // filter the top-N report is dominated by primitives like ManualResetEventSlim.Wait or
+        // LowLevelLifoSemaphore.Wait coming from thread-pool workers, async machinery and
+        // explicit synchronisation, which is not useful when looking for hot CPU code.
+        //
+        // The patterns below are used as FilterStackSource ExcludeRegExs: if any frame in a
+        // sample's stack matches one of them the entire sample is dropped, so a thread sitting
+        // in (or transitively under) any of these calls is treated as blocked and ignored.
+        //
+        // Patterns are standard .NET regexes (case-insensitive) matched against the frame name
+        // format produced by SampleProfilerThreadTimeComputer:
+        // "Module!Namespace.Type.Method(args)". \b is used so e.g. "Task\.Wait\b" does not
+        // also match "Task.WaitAsync". (Internally each pattern is prefixed with '@' before
+        // being handed to FilterStackSource so its ToDotNetRegEx() helper passes it through
+        // verbatim instead of running it through Regex.Escape.)
+        public static readonly IReadOnlyList<string> DefaultBlockingMethodPatterns = new[]
+        {
+            @"ManualResetEventSlim\.Wait\b",
+            @"ManualResetEvent\.WaitOne\b",
+            @"AutoResetEvent\.WaitOne\b",
+            @"Monitor\.Wait\b",
+            @"Monitor\.ObjWait\b",
+            @"WaitHandle\.WaitOne\b",
+            @"WaitHandle\.WaitAny\b",
+            @"WaitHandle\.WaitAll\b",
+            @"WaitHandle\.WaitOneNoCheck\b",
+            @"WaitHandle\.WaitMultipleIgnoringSyncContext\b",
+            @"SemaphoreSlim\.Wait\b",
+            @"Semaphore\.WaitOne\b",
+            @"Mutex\.WaitOne\b",
+            @"Thread\.Sleep\b",
+            @"Thread\.SleepInternal\b",
+            @"Thread\.Join\b",
+            @"Tasks\.Task\.Wait\b",
+            @"Tasks\.Task\.WaitAny\b",
+            @"Tasks\.Task\.WaitAll\b",
+            @"Tasks\.Task\.SpinThenBlockingWait\b",
+            @"Tasks\.Task\.InternalWaitCore\b",
+            @"Tasks\.Task\.InternalWait\b",
+            @"Barrier\.SignalAndWait\b",
+            @"CountdownEvent\.Wait\b",
+            @"LowLevelLifoSemaphore\.Wait\b",
+            @"LowLevelLifoSemaphore\.WaitForSignal\b",
+            @"LowLevelLifoSemaphore\.WaitNative\b",
+            @"LowLevelLock\.Acquire\b",
+            @"LowLevelMonitor\.Wait\b",
+            @"PortableThreadPool\.WorkerThread\.WorkerDoWork\b",
+            @"BlockingCollection`1\.TryTakeWithNoTimeValidation\b",
+        };
+
         public static IReadOnlyList<SampledMethod> ComputeTopMethods(
             byte[] netTraceData,
             int count,
             bool inclusive,
             IReadOnlyList<string> excludedModules,
+            IReadOnlyList<string> blockingMethodPatterns,
             TextWriter log)
         {
             log ??= TextWriter.Null;
@@ -160,9 +214,27 @@ namespace Memory.Introspect.Trace
                 SampleProfilerThreadTimeComputer computer = new(eventLog, symbolReader);
                 computer.GenerateThreadTimeStacks(stackSource);
 
+                string excludeRegEx = null;
+                if (blockingMethodPatterns is { Count: > 0 })
+                {
+                    // FilterStackSource treats ExcludeRegExs as semicolon-separated patterns;
+                    // a sample is excluded if any frame in its stack matches any of them. We
+                    // use this to drop stacks whose threads are parked in a blocking wait so
+                    // they do not dominate the top-N report.
+                    //
+                    // Patterns get run through ToDotNetRegEx() which Regex.Escape's the input
+                    // unless it starts with '@'. We want the raw .NET regex semantics (so e.g.
+                    // \b actually means a word boundary instead of a literal '\b'), so the '@'
+                    // prefix is added here.
+                    excludeRegEx = string.Join(";", blockingMethodPatterns
+                        .Where(p => !string.IsNullOrWhiteSpace(p))
+                        .Select(p => p.StartsWith("@") ? p : "@" + p));
+                }
+
                 FilterParams filterParams = new()
                 {
-                    FoldRegExs = "CPU_TIME;UNMANAGED_CODE_TIME;{Thread (}",
+                    FoldRegExs    = "CPU_TIME;UNMANAGED_CODE_TIME;{Thread (}",
+                    ExcludeRegExs = excludeRegEx,
                 };
                 FilterStackSource filterStack = new(filterParams, stackSource, ScalingPolicyKind.ScaleToData);
                 CallTree callTree = new(ScalingPolicyKind.ScaleToData) { StackSource = filterStack };
@@ -244,6 +316,15 @@ namespace Memory.Introspect.Trace
         /// </summary>
         public IReadOnlyList<string> DefaultExcludedModules { get; internal set; } = SamplingProfiler.DefaultExcludedModules;
 
+        /// <summary>
+        /// Regex patterns identifying methods that put a thread into a blocking wait. Any
+        /// sample whose stack contains a matching frame is dropped from <see cref="TopMethods"/>
+        /// — so a thread parked in e.g. <c>ManualResetEventSlim.Wait</c> does not get reported
+        /// as a hot method. Carries the value configured on
+        /// <c>MemoryIntrospectorOptions.SamplingBlockingMethodPatterns</c> at capture time.
+        /// </summary>
+        public IReadOnlyList<string> DefaultBlockingMethodPatterns { get; internal set; } = SamplingProfiler.DefaultBlockingMethodPatterns;
+
         public int TraceSizeInBytes => NetTraceData?.Length ?? 0;
 
         public void SaveToDisk(string fileName)
@@ -261,16 +342,25 @@ namespace Memory.Introspect.Trace
         /// <param name="excludedModules">Modules (assembly names) to hide from the report.
         /// Pass null to use <see cref="DefaultExcludedModules"/>; pass an empty list to disable
         /// module filtering entirely.</param>
+        /// <param name="blockingMethodPatterns">Regex patterns identifying methods that put a
+        /// thread into a blocking wait. Any sample whose stack contains a matching frame is
+        /// dropped before computing the top-N. Pass null to use
+        /// <see cref="DefaultBlockingMethodPatterns"/>; pass an empty list to disable blocked
+        /// thread filtering entirely.</param>
         public IReadOnlyList<SampledMethod> TopMethods(
             int count = 5,
             bool inclusive = false,
             IEnumerable<string> excludedModules = null,
+            IEnumerable<string> blockingMethodPatterns = null,
             TextWriter log = null)
         {
-            IReadOnlyList<string> effective = excludedModules is null
+            IReadOnlyList<string> effectiveModules = excludedModules is null
                 ? DefaultExcludedModules
                 : (excludedModules as IReadOnlyList<string>) ?? excludedModules.ToList();
-            return SamplingProfiler.ComputeTopMethods(NetTraceData, count, inclusive, effective, log);
+            IReadOnlyList<string> effectiveBlocking = blockingMethodPatterns is null
+                ? DefaultBlockingMethodPatterns
+                : (blockingMethodPatterns as IReadOnlyList<string>) ?? blockingMethodPatterns.ToList();
+            return SamplingProfiler.ComputeTopMethods(NetTraceData, count, inclusive, effectiveModules, effectiveBlocking, log);
         }
     }
 }
