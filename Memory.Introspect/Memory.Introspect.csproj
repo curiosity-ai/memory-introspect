@@ -4,7 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
-    <Version>0.0.46</Version>
+    <Version>0.0.47</Version>
     <PackageId>Memory.Introspect</PackageId>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <Description>Programmatic .gcdump capture for .NET</Description>

@@ -57,6 +57,7 @@ namespace Memory.Introspect
                 _options.CircularBufferSizeInMB,
                 _options.DiagnosticPort,
                 _options.SamplingExcludedModules,
+                _options.SamplingBlockingMethodPatterns,
                 GetTextWriter(),
                 cancellationToken);
         }
@@ -136,6 +137,16 @@ namespace Memory.Introspect
         /// filtering.
         /// </summary>
         public IReadOnlyList<string> SamplingExcludedModules { get; set; } = SamplingProfiler.DefaultExcludedModules;
+
+        /// <summary>
+        /// Regex patterns that identify methods which park a thread in a blocking wait
+        /// (locks, ManualResetEventSlim.Wait, Monitor.Wait, Task.Wait, etc.). Any sample
+        /// whose stack contains a matching frame is dropped from
+        /// <see cref="SamplingProfileResult.TopMethods"/>, so threads sitting in those
+        /// waits do not show up as hot CPU methods. Set to an empty list to disable
+        /// blocked-thread filtering entirely.
+        /// </summary>
+        public IReadOnlyList<string> SamplingBlockingMethodPatterns { get; set; } = SamplingProfiler.DefaultBlockingMethodPatterns;
     }
 
     public class MemoryGraphResult
