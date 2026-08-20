@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using Memory.Introspect.Trace;
 using Microsoft.Diagnostics.Tracing.Stacks;
 
 namespace Microsoft.Diagnostics.Tools.Trace.CommandLine
@@ -81,6 +82,68 @@ namespace Microsoft.Diagnostics.Tools.Trace.CommandLine
             return strList;
         }
 
+
+        /// <summary>
+        /// Writes the `dotnet-trace report topN` table to an arbitrary <see cref="TextWriter"/>.
+        /// Same layout as <see cref="TopNWriteToStdOut"/>, but driven by the library's
+        /// <see cref="SampledMethod"/> instead of TraceEvent's CallTree nodes.
+        /// </summary>
+        internal static void TopNWriteTo(TextWriter output, IReadOnlyList<SampledMethod> nodesToReport, bool isInclusive, bool isVerbose)
+        {
+            const int functionColumnWidth = 70;
+            const int measureColumnWidth = 20;
+            string measureType = isInclusive ? "Inclusive" : "Exclusive";
+
+            int n = nodesToReport?.Count ?? 0;
+            if (n == 0)
+            {
+                output.WriteLine("[WARNING] No method calls found");
+                return;
+            }
+
+            int maxDigit = (int)Math.Log10(n) + 1;
+            string extra = new(' ', maxDigit - 1);
+
+            string header = "Top " + n.ToString() + " Functions (" + measureType + ")";
+            string uniformHeader = MakeFixedWidth(header, functionColumnWidth + 7);
+            string uniformInclusive = MakeFixedWidth("Inclusive", measureColumnWidth);
+            string uniformExclusive = MakeFixedWidth("Exclusive", measureColumnWidth);
+            output.WriteLine(uniformHeader + extra + uniformInclusive + uniformExclusive);
+
+            for (int i = 0; i < n; i++)
+            {
+                int iLength = (int)Math.Log10(i + 1) + 1;
+                int numSpace = maxDigit - iLength + 1;
+
+                SampledMethod node = nodesToReport[i];
+                string formatName = FormatFunction(node.Name ?? string.Empty);
+                if (formatName == "?!?")
+                {
+                    formatName = "Missing Symbol";
+                }
+                List<string> nameList = SplitInto(formatName, functionColumnWidth);
+
+                int numLines = isVerbose ? nameList.Count : 1;
+
+                for (int j = 0; j < numLines; j++)
+                {
+                    string inclusiveMeasure = "";
+                    string exclusiveMeasure = "";
+                    string number = new(' ', maxDigit + 2); //+2 to account for '. '
+
+                    if (j == 0)
+                    {
+                        inclusiveMeasure = Math.Round(node.InclusiveMetricPercent, 2).ToString() + "%";
+                        exclusiveMeasure = Math.Round(node.ExclusiveMetricPercent, 2).ToString() + "%";
+                        number = string.Concat((i + 1).ToString(), ".", number.AsSpan(maxDigit - numSpace + 2));
+                    }
+
+                    string uniformIMeasure = MakeFixedWidth(inclusiveMeasure, measureColumnWidth).PadLeft(measureColumnWidth + 4);
+                    string uniformEMeasure = MakeFixedWidth(exclusiveMeasure, measureColumnWidth);
+                    output.WriteLine(number + nameList[j] + uniformIMeasure + uniformEMeasure);
+                }
+            }
+        }
 
         internal static void TopNWriteToStdOut(List<CallTreeNodeBase> nodesToReport, bool isInclusive, bool isVerbose)
         {
