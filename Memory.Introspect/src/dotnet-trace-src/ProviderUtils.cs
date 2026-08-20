@@ -89,16 +89,16 @@ namespace Memory.Introspect.Trace
         /// into a single set of providers, exactly the way `dotnet-trace collect` does.
         /// </summary>
         /// <param name="providersArg">Provider specs, each 'Name[:Keywords[:Level[:KeyValueArgs]]]'.</param>
-        /// <param name="clreventsArg">A '+' separated list of CLR event keyword names.</param>
-        /// <param name="clreventlevel">The verbosity level for <paramref name="clreventsArg"/>.</param>
-        /// <param name="profiles">Named profiles from <see cref="TraceProfiles.All"/>.</param>
+        /// <param name="clrEvents">The CLR event keywords to enable on the runtime provider.</param>
+        /// <param name="clrEventLevel">The verbosity level for <paramref name="clrEvents"/>.</param>
+        /// <param name="profiles">Built-in profiles to enable.</param>
         /// <param name="extraProviders">Already strongly-typed providers to merge in.</param>
         /// <param name="log">Optional log for the provider table and warnings.</param>
         public static List<EventPipeProvider> ComputeProviderConfig(
             IReadOnlyList<string> providersArg,
-            string clreventsArg,
-            string clreventlevel,
-            IReadOnlyList<string> profiles,
+            ClrEventKeywords clrEvents,
+            EventLevel? clrEventLevel,
+            TraceProfileKind profiles,
             IReadOnlyList<EventPipeProvider> extraProviders = null,
             TextWriter log = null)
         {
@@ -139,28 +139,23 @@ namespace Memory.Introspect.Trace
                 }
             }
 
-            if (profiles is not null)
+            TraceProfiles.Validate(profiles);
+            foreach (TraceProfile traceProfile in TraceProfiles.Expand(profiles))
             {
-                foreach (string profileName in profiles)
+                foreach (EventPipeProvider provider in traceProfile.Providers)
                 {
-                    TraceProfile traceProfile = TraceProfiles.Find(profileName)
-                        ?? throw new DiagnosticToolException($"Invalid profile name: {profileName}. Known profiles: {string.Join(", ", TraceProfiles.All.Select(p => p.Name))}");
-
-                    foreach (EventPipeProvider provider in traceProfile.Providers)
+                    // Prefer providers set explicitly over implicit profile configuration.
+                    if (!merged.ContainsKey(provider.Name))
                     {
-                        // Prefer providers set explicitly over implicit profile configuration.
-                        if (!merged.ContainsKey(provider.Name))
-                        {
-                            merged[provider.Name] = provider;
-                            providerSources[provider.Name] = ProviderSource.ProfileArg;
-                        }
+                        merged[provider.Name] = provider;
+                        providerSources[provider.Name] = ProviderSource.ProfileArg;
                     }
                 }
             }
 
-            if (!string.IsNullOrEmpty(clreventsArg))
+            if (clrEvents != ClrEventKeywords.None)
             {
-                EventPipeProvider provider = ToCLREventPipeProvider(clreventsArg, clreventlevel);
+                EventPipeProvider provider = ToCLREventPipeProvider(clrEvents, clrEventLevel);
                 if (provider is not null)
                 {
                     if (!merged.ContainsKey(provider.Name))
@@ -227,38 +222,49 @@ namespace Memory.Introspect.Trace
             string.Format("{0,-40}", provider.Name) + string.Format("0x{0,-18}", $"{provider.Keywords:X16}") + string.Format("{0,-8}", provider.EventLevel + $"({(int)provider.EventLevel})");
 
         /// <summary>
-        /// Builds a Microsoft-Windows-DotNETRuntime provider from a '+' separated list of CLR
-        /// event keyword names, e.g. "gc+gchandle+exception".
+        /// Builds a Microsoft-Windows-DotNETRuntime provider enabling <paramref name="clrEvents"/>
+        /// at <paramref name="clrEventLevel"/> (Informational when not given).
         /// </summary>
-        public static EventPipeProvider ToCLREventPipeProvider(string clreventslist, string clreventlevel)
+        public static EventPipeProvider ToCLREventPipeProvider(ClrEventKeywords clrEvents, EventLevel? clrEventLevel)
         {
-            if (string.IsNullOrEmpty(clreventslist))
+            if (clrEvents == ClrEventKeywords.None)
             {
                 return null;
             }
 
-            string[] clrevents = clreventslist.Split('+');
-            long clrEventsKeywordsMask = 0;
-            for (int i = 0; i < clrevents.Length; i++)
-            {
-                if (CLREventKeywords.TryGetValue(clrevents[i], out long keyword))
-                {
-                    clrEventsKeywordsMask |= keyword;
-                }
-                else
-                {
-                    throw new DiagnosticToolException($"{clrevents[i]} is not a valid CLR event keyword");
-                }
-            }
-
-            EventLevel level = EventLevel.Informational;
-            if (!string.IsNullOrEmpty(clreventlevel))
-            {
-                level = GetEventLevel(clreventlevel);
-            }
-
-            return new EventPipeProvider(CLREventProviderName, level, clrEventsKeywordsMask, null);
+            return new EventPipeProvider(CLREventProviderName, clrEventLevel ?? EventLevel.Informational, (long)clrEvents, null);
         }
+
+        /// <summary>
+        /// Parses a <c>dotnet-trace --clrevents</c> style '+' separated keyword list, e.g.
+        /// "gc+gchandle+exception", into <see cref="ClrEventKeywords"/>. Handy when the keyword
+        /// set comes from configuration or a command line rather than from code.
+        /// </summary>
+        public static ClrEventKeywords ParseClrEvents(string clrEventsList)
+        {
+            if (string.IsNullOrEmpty(clrEventsList))
+            {
+                return ClrEventKeywords.None;
+            }
+
+            long mask = 0;
+            foreach (string name in clrEventsList.Split('+'))
+            {
+                if (!CLREventKeywords.TryGetValue(name, out long keyword))
+                {
+                    throw new DiagnosticToolException($"{name} is not a valid CLR event keyword");
+                }
+                mask |= keyword;
+            }
+
+            return (ClrEventKeywords)mask;
+        }
+
+        /// <summary>
+        /// Parses a <c>dotnet-trace</c> style event level, either a name ("verbose") or a number
+        /// ("5"), into an <see cref="EventLevel"/>.
+        /// </summary>
+        public static EventLevel ParseEventLevel(string token) => GetEventLevel(token);
 
         private static EventLevel GetEventLevel(string token)
         {

@@ -101,22 +101,28 @@ var trace = await introspector.CollectTraceAsync(pid, new TraceCollectionOptions
 {
     Duration = TimeSpan.FromSeconds(20),
 
-    // --profile gc-collect
-    Profiles = new[] { "gc-collect" },
+    // --profile gc-collect (combine several with |)
+    Profiles = TraceProfileKind.GcCollect,
 
     // --providers "MyCompany-MyApp:0xF:5"
     Providers = new[] { "MyCompany-MyApp:0xF:5" },
 
     // --clrevents gc+exception --clreventlevel verbose
-    ClrEvents      = "gc+exception",
-    ClrEventLevel  = "verbose",
+    ClrEvents     = ClrEventKeywords.Gc | ClrEventKeywords.Exception,
+    ClrEventLevel = EventLevel.Verbose,
 
     OutputPath = "app.nettrace",
 });
 ```
 
+Profiles and CLR event keywords are strongly typed: `TraceProfileKind` and `ClrEventKeywords`
+are `[Flags]` enums, and `ClrEventLevel` is `System.Diagnostics.Tracing.EventLevel`. When the
+values come from configuration or a command line instead of from code,
+`ProviderUtils.ParseClrEvents("gc+exception")`, `ProviderUtils.ParseEventLevel("verbose")` and
+`TraceProfiles.Find("gc-collect")` map the CLI spellings onto them.
+
 When no profile, provider or CLR event is configured at all, the same defaults as the CLI tool
-are used: `dotnet-common` + `dotnet-sampled-thread-time`.
+are used: `TraceProfileKind.Default` (`dotnet-common` + `dotnet-sampled-thread-time`).
 
 #### Stopping on an event instead of a timer
 

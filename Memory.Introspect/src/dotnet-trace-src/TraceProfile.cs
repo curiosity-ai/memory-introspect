@@ -24,14 +24,18 @@ namespace Memory.Introspect.Trace
     /// </summary>
     public sealed class TraceProfile
     {
-        internal TraceProfile(string name, IEnumerable<EventPipeProvider> providers, string description)
+        internal TraceProfile(TraceProfileKind kind, string name, IEnumerable<EventPipeProvider> providers, string description)
         {
+            Kind = kind;
             Name = name;
             Providers = providers == null ? Array.Empty<EventPipeProvider>() : new List<EventPipeProvider>(providers).AsReadOnly();
             Description = description;
         }
 
-        /// <summary>The profile name, e.g. "dotnet-common".</summary>
+        /// <summary>The profile as a <see cref="TraceProfileKind"/> flag.</summary>
+        public TraceProfileKind Kind { get; }
+
+        /// <summary>The profile name as used by the CLI tool, e.g. "dotnet-common".</summary>
         public string Name { get; }
 
         /// <summary>The providers this profile enables.</summary>
@@ -66,16 +70,19 @@ namespace Memory.Introspect.Trace
         public static IReadOnlyList<TraceProfile> All { get; } = new[]
         {
             new TraceProfile(
+                TraceProfileKind.DotNetCommon,
                 "dotnet-common",
                 new[] { new EventPipeProvider("Microsoft-Windows-DotNETRuntime", EventLevel.Informational, DotNetCommonKeyword) },
                 DotNetCommonDescription),
 
             new TraceProfile(
+                TraceProfileKind.DotNetSampledThreadTime,
                 "dotnet-sampled-thread-time",
                 new[] { new EventPipeProvider(SamplingProfiler.SampleProfilerProviderName, EventLevel.Informational) },
                 "Samples .NET thread stacks (~100 Hz) to estimate how much wall clock time code is using."),
 
             new TraceProfile(
+                TraceProfileKind.GcVerbose,
                 "gc-verbose",
                 new[]
                 {
@@ -89,6 +96,7 @@ namespace Memory.Introspect.Trace
                 "Tracks GC collections and samples object allocations."),
 
             new TraceProfile(
+                TraceProfileKind.GcCollect,
                 "gc-collect",
                 new[]
                 {
@@ -108,6 +116,7 @@ namespace Memory.Introspect.Trace
             },
 
             new TraceProfile(
+                TraceProfileKind.Database,
                 "database",
                 new[]
                 {
@@ -137,11 +146,49 @@ namespace Memory.Introspect.Trace
         /// The profiles used when no profile, provider or CLR event is configured, matching
         /// the `dotnet-trace collect` default.
         /// </summary>
-        public static IReadOnlyList<string> DefaultProfileNames { get; } = new[] { "dotnet-common", "dotnet-sampled-thread-time" };
+        public const TraceProfileKind DefaultProfiles = TraceProfileKind.Default;
 
-        /// <summary>Finds a profile by name (case-insensitive), or null when there is no such profile.</summary>
+        /// <summary>Finds a profile by kind, or null when <paramref name="kind"/> is not a single known profile.</summary>
+        public static TraceProfile Find(TraceProfileKind kind) => All.FirstOrDefault(p => p.Kind == kind);
+
+        /// <summary>
+        /// Finds a profile by its CLI name (case-insensitive), or null when there is no such
+        /// profile. Useful when mapping user input onto <see cref="TraceProfileKind"/>.
+        /// </summary>
         public static TraceProfile Find(string name) =>
             All.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>Expands a (possibly combined) <paramref name="kinds"/> into the profiles it names.</summary>
+        public static IEnumerable<TraceProfile> Expand(TraceProfileKind kinds)
+        {
+            foreach (TraceProfile profile in All)
+            {
+                if ((kinds & profile.Kind) == profile.Kind)
+                {
+                    yield return profile;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Throws when <paramref name="kinds"/> contains bits that do not correspond to a known
+        /// profile, so a typo'd cast fails loudly instead of silently tracing nothing.
+        /// </summary>
+        internal static void Validate(TraceProfileKind kinds)
+        {
+            TraceProfileKind known = TraceProfileKind.None;
+            foreach (TraceProfile profile in All)
+            {
+                known |= profile.Kind;
+            }
+
+            TraceProfileKind unknown = kinds & ~known;
+            if (unknown != TraceProfileKind.None)
+            {
+                throw new DiagnosticToolException(
+                    $"Unknown trace profile flag(s): {unknown}. Known profiles: {string.Join(", ", All.Select(p => p.Kind.ToString()))}");
+            }
+        }
 
         /// <summary>
         /// Keywords for the DiagnosticSourceEventSource provider.

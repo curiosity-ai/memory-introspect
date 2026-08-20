@@ -5,6 +5,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.Tracing;
 using Memory.Introspect.Diagnostics.NETCore.Client;
 
 namespace Memory.Introspect.Trace
@@ -27,21 +28,27 @@ namespace Memory.Introspect.Trace
         public IReadOnlyList<EventPipeProvider> ProviderConfigurations { get; set; }
 
         /// <summary>
-        /// Named profiles from <see cref="TraceProfiles.All"/>, e.g. "dotnet-common" or
-        /// "gc-collect". When no providers, profiles or CLR events are configured at all, the
-        /// <see cref="TraceProfiles.DefaultProfileNames"/> are used — same as the CLI tool.
+        /// The built-in profiles to enable, combined with <c>|</c>, e.g.
+        /// <c>TraceProfileKind.DotNetCommon | TraceProfileKind.DotNetSampledThreadTime</c>.
+        /// Equivalent to <c>--profile</c>. When no providers, profiles or CLR events are
+        /// configured at all, <see cref="TraceProfiles.DefaultProfiles"/> is used — same as the
+        /// CLI tool.
         /// </summary>
-        public IReadOnlyList<string> Profiles { get; set; }
+        public TraceProfileKind Profiles { get; set; } = TraceProfileKind.None;
 
         /// <summary>
-        /// A '+' separated list of CLR event keyword names to enable on
-        /// Microsoft-Windows-DotNETRuntime, e.g. <c>"gc+gchandle+exception"</c>. Equivalent to
-        /// <c>--clrevents</c>.
+        /// The CLR event keywords to enable on Microsoft-Windows-DotNETRuntime, combined with
+        /// <c>|</c>, e.g. <c>ClrEventKeywords.Gc | ClrEventKeywords.Exception</c>. Equivalent to
+        /// <c>--clrevents</c>. Use <see cref="ProviderUtils.ParseClrEvents"/> when the set comes
+        /// from a "gc+exception" style string.
         /// </summary>
-        public string ClrEvents { get; set; }
+        public ClrEventKeywords ClrEvents { get; set; } = ClrEventKeywords.None;
 
-        /// <summary>The verbosity for <see cref="ClrEvents"/>; a name ("verbose") or number ("5").</summary>
-        public string ClrEventLevel { get; set; }
+        /// <summary>
+        /// The verbosity for <see cref="ClrEvents"/>. Equivalent to <c>--clreventlevel</c>;
+        /// defaults to <see cref="EventLevel.Informational"/> when not set.
+        /// </summary>
+        public EventLevel? ClrEventLevel { get; set; }
 
         /// <summary>
         /// How long to record. When null (or zero) the capture runs until the cancellation

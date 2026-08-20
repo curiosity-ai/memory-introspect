@@ -64,14 +64,14 @@ namespace Memory.Introspect.Trace
             try
             {
                 // ---- providers -------------------------------------------------------------
-                IReadOnlyList<string> profiles = options.Profiles;
-                if ((profiles is null || profiles.Count == 0)
+                TraceProfileKind profiles = options.Profiles;
+                if (profiles == TraceProfileKind.None
                     && (options.Providers is null || options.Providers.Count == 0)
                     && (options.ProviderConfigurations is null || options.ProviderConfigurations.Count == 0)
-                    && string.IsNullOrEmpty(options.ClrEvents))
+                    && options.ClrEvents == ClrEventKeywords.None)
                 {
-                    log.WriteLine($"[trace] No profile or providers specified, defaulting to trace profiles '{string.Join("' + '", TraceProfiles.DefaultProfileNames)}'.");
-                    profiles = TraceProfiles.DefaultProfileNames;
+                    profiles = TraceProfiles.DefaultProfiles;
+                    log.WriteLine($"[trace] No profile or providers specified, defaulting to trace profiles '{string.Join("' + '", TraceProfiles.Expand(profiles).Select(p => p.Name))}'.");
                 }
 
                 List<EventPipeProvider> providerCollection = ProviderUtils.ComputeProviderConfig(
@@ -278,26 +278,17 @@ namespace Memory.Introspect.Trace
             catch { return 0; }
         }
 
-        private static (long RundownKeyword, RetryStrategy RetryStrategy) ResolveRundown(IReadOnlyList<string> profiles, TraceCollectionOptions options)
+        private static (long RundownKeyword, RetryStrategy RetryStrategy) ResolveRundown(TraceProfileKind profiles, TraceCollectionOptions options)
         {
             long rundownKeyword = 0;
             RetryStrategy retryStrategy = RetryStrategy.NothingToRetry;
 
-            if (profiles is not null)
+            foreach (TraceProfile profile in TraceProfiles.Expand(profiles))
             {
-                foreach (string profileName in profiles)
+                rundownKeyword |= profile.RundownKeyword;
+                if (profile.RetryStrategy > retryStrategy)
                 {
-                    TraceProfile profile = TraceProfiles.Find(profileName);
-                    if (profile is null)
-                    {
-                        continue; // already validated in ComputeProviderConfig
-                    }
-
-                    rundownKeyword |= profile.RundownKeyword;
-                    if (profile.RetryStrategy > retryStrategy)
-                    {
-                        retryStrategy = profile.RetryStrategy;
-                    }
+                    retryStrategy = profile.RetryStrategy;
                 }
             }
 

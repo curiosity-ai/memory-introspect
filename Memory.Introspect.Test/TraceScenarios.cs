@@ -33,13 +33,21 @@ internal static class TraceScenarios
         Section(logger, "list-profiles");
         foreach (var profile in MemoryIntrospector.ListTraceProfiles())
         {
-            logger.LogInformation("  {0,-28} {1}", profile.Name, profile.Description.Replace("\n", " "));
+            logger.LogInformation("  {0,-28} {1,-26} {2}", profile.Name, profile.Kind, profile.Description.Replace("\n", " "));
             foreach (var provider in profile.Providers)
             {
                 logger.LogInformation("      {0,-45} keywords=0x{1:X16} level={2}", provider.Name, provider.Keywords, provider.EventLevel);
             }
         }
-        Assert(MemoryIntrospector.ListTraceProfiles().Count >= 5, "expected at least 5 built-in profiles");
+        var profiles = MemoryIntrospector.ListTraceProfiles();
+        Assert(profiles.Count >= 5, "expected at least 5 built-in profiles");
+        foreach (var profile in profiles)
+        {
+            Assert(ReferenceEquals(TraceProfiles.Find(profile.Kind), profile), $"{profile.Kind} does not round-trip through TraceProfiles.Find");
+            Assert(ReferenceEquals(TraceProfiles.Find(profile.Name), profile), $"{profile.Name} does not round-trip through TraceProfiles.Find");
+        }
+        Assert(TraceProfiles.Expand(TraceProfileKind.Default).Count() == 2, "the default profile set should expand to 2 profiles");
+        Assert(ProviderUtils.ParseClrEvents("gc+exception") == (ClrEventKeywords.Gc | ClrEventKeywords.Exception), "clrevents string parsing does not agree with the enum");
     }
 
     // ---- dotnet-trace ps ------------------------------------------------------------------
@@ -134,8 +142,8 @@ internal static class TraceScenarios
         var result = await introspector.CollectTraceAsync(pid, new TraceCollectionOptions
         {
             Duration = TimeSpan.FromSeconds(4),
-            ClrEvents = "gc+exception+contention",
-            ClrEventLevel = "verbose",
+            ClrEvents = ClrEventKeywords.Gc | ClrEventKeywords.Exception | ClrEventKeywords.Contention,
+            ClrEventLevel = EventLevel.Verbose,
             Rundown = false,
         });
 
@@ -144,7 +152,7 @@ internal static class TraceScenarios
 
         var provider = result.Providers.Single();
         Assert(provider.Name == "Microsoft-Windows-DotNETRuntime", "clrevents should map onto the runtime provider");
-        Assert(provider.Keywords == (0x1 | 0x8000 | 0x4000), $"clrevents keyword mask was 0x{provider.Keywords:X}");
+        Assert(provider.Keywords == (long)(ClrEventKeywords.Gc | ClrEventKeywords.Exception | ClrEventKeywords.Contention), $"clrevents keyword mask was 0x{provider.Keywords:X}");
         Assert(provider.EventLevel == EventLevel.Verbose, $"clreventlevel was {provider.EventLevel}");
 
         logger.LogInformation("  captured {0:N0} bytes with keywords 0x{1:X} and no rundown", result.TraceSizeInBytes, provider.Keywords);
@@ -160,7 +168,7 @@ internal static class TraceScenarios
         var result = await introspector.CollectTraceAsync(pid, new TraceCollectionOptions
         {
             Duration = TimeSpan.FromSeconds(4),
-            Profiles = new[] { "gc-collect" },
+            Profiles = TraceProfileKind.GcCollect,
             OutputPath = output,
         });
 
@@ -182,7 +190,7 @@ internal static class TraceScenarios
         var result = await introspector.CollectTraceAsync(pid, new TraceCollectionOptions
         {
             Duration = TimeSpan.FromSeconds(5),
-            Profiles = new[] { "dotnet-sampled-thread-time" },
+            Profiles = TraceProfileKind.DotNetSampledThreadTime,
             OutputPath = output,
             Format = TraceFileFormat.Speedscope,
         });
@@ -257,7 +265,7 @@ internal static class TraceScenarios
             // What you would use against a big, chatty process so the runtime does not drop events.
             CircularBufferSizeInMB = 2048,
             StreamCopyBufferSizeInBytes = 16 * 1024 * 1024,
-            Profiles = new[] { "dotnet-common", "dotnet-sampled-thread-time" },
+            Profiles = TraceProfileKind.DotNetCommon | TraceProfileKind.DotNetSampledThreadTime,
             OutputPath = output,
         });
 
@@ -270,7 +278,7 @@ internal static class TraceScenarios
         var inherited = await defaulted.CollectTraceAsync(pid, new TraceCollectionOptions
         {
             Duration = TimeSpan.FromSeconds(2),
-            Profiles = new[] { "dotnet-sampled-thread-time" },
+            Profiles = TraceProfileKind.DotNetSampledThreadTime,
         });
         AssertSuccess(inherited, logger);
         Assert(inherited.CircularBufferSizeInMB == 512, $"expected the introspector default of 512 MB, got {inherited.CircularBufferSizeInMB}");
@@ -287,7 +295,7 @@ internal static class TraceScenarios
         var result = await introspector.CollectTraceAsync(pid, new TraceCollectionOptions
         {
             Duration = TimeSpan.FromMinutes(5),
-            Profiles = new[] { "dotnet-sampled-thread-time" },
+            Profiles = TraceProfileKind.DotNetSampledThreadTime,
         }, cts.Token);
 
         Assert(result.Cancelled, "expected the result to be marked as cancelled");
