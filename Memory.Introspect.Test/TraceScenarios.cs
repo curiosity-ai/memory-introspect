@@ -24,6 +24,8 @@ internal static class TraceScenarios
         await CollectUntilStoppingEventAsync(introspector, pid, outputDirectory, logger);
         await CollectWithLargeBuffersAsync(introspector, pid, outputDirectory, logger);
         await CollectCancelledAsync(introspector, pid, logger);
+        await CollectAllocationReportAsync(introspector, pid, outputDirectory, logger);
+        await CollectSelfAllocationReportAsync(introspector, logger);
     }
 
     // ---- dotnet-trace list-profiles ------------------------------------------------------
@@ -302,6 +304,124 @@ internal static class TraceScenarios
         Assert(result.Success, "a cancelled capture should still return the data collected so far");
         Assert(result.Elapsed < TimeSpan.FromSeconds(30), $"cancellation did not take effect (ran for {result.Elapsed})");
         logger.LogInformation("  cancelled after {0:0.##}s keeping {1:N0} bytes", result.Elapsed.TotalSeconds, result.TraceSizeInBytes);
+    }
+
+    // ---- per-type allocation report ------------------------------------------------------------
+
+    private static async Task CollectAllocationReportAsync(MemoryIntrospector introspector, int pid, string dir, ILogger logger)
+    {
+        Section(logger, "allocation report (which objects were allocated)");
+
+        string output = Path.Combine(dir, "allocations.nettrace");
+        var trace = await introspector.CollectTraceAsync(pid, AllocationTracing.CreateOptions(TimeSpan.FromSeconds(6), output));
+        AssertSuccess(trace, logger);
+
+        // The allocation options must not request rundown, which an allocation report doesn't need.
+        Assert(trace.RundownKeyword == 0, $"allocation options should disable rundown, keyword was 0x{trace.RundownKeyword:X}");
+
+        var report = trace.TopAllocatedTypes(count: 12);
+        Assert(!report.IsEmpty, "expected allocation events in the trace");
+        Assert(report.Source != AllocationSampleSource.None, "expected an allocation event source");
+        Assert(report.TotalAllocatedBytes > 0, "expected a non-zero allocated byte total");
+        Assert(report.DistinctTypeCount >= report.Types.Count, "DistinctTypeCount must count every type, not just the reported ones");
+        Assert(report.Types.Count <= 12, "the top-N trim was not applied");
+
+        var table = new StringWriter();
+        AllocationTracing.Write(table, report);
+        foreach (var line in table.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            logger.LogInformation("  {0}", line.TrimEnd());
+        }
+
+        // The workload allocates 8 KB / 64 KB byte[] in a tight loop, so Byte[] must dominate.
+        Assert(report.Types.Any(t => t.TypeName.Contains("Byte[]")), $"expected System.Byte[] in the report, got: {string.Join(" | ", report.Types.Take(5).Select(t => t.TypeName))}");
+        Assert(report.Types[0].AllocatedBytesPercent > 0, "percentages were not computed");
+        double reportedPercent = report.Types.Sum(t => t.AllocatedBytesPercent);
+        Assert(reportedPercent <= 100.001, $"the reported types' percentages must not exceed 100, got {reportedPercent:0.###}");
+        if (report.Types.Count == report.DistinctTypeCount)
+        {
+            Assert(Math.Abs(reportedPercent - 100.0) < 0.01, $"with every type reported the percentages must sum to 100, got {reportedPercent:0.###}");
+        }
+
+        // The 64 KB survivors are below the 85 KB LOH threshold, but the report must still
+        // account for every byte across the two heaps.
+        foreach (var type in report.Types)
+        {
+            Assert(type.SmallObjectHeapBytes + type.LargeObjectHeapBytes == type.AllocatedBytes,
+                $"SOH+LOH bytes should add up to AllocatedBytes for {type.TypeName}");
+        }
+
+        // And the same numbers come back when analysing the file offline.
+        var offline = introspector.ReportTopAllocatedTypes(output, count: 12);
+        Assert(offline.TotalAllocatedBytes == report.TotalAllocatedBytes, "offline analysis disagrees with the in-flight report");
+        Assert(offline.Types[0].TypeName == report.Types[0].TypeName, "offline analysis produced a different top type");
+
+        // A trace captured without the allocation keywords must report empty, not throw.
+        var noAlloc = await introspector.CollectTraceAsync(pid, new TraceCollectionOptions
+        {
+            Duration = TimeSpan.FromSeconds(2),
+            Profiles = TraceProfileKind.DotNetSampledThreadTime,
+        });
+        AssertSuccess(noAlloc, logger);
+        Assert(noAlloc.TopAllocatedTypes().IsEmpty, "a trace without allocation events should report an empty allocation report");
+        logger.LogInformation("  a trace without allocation keywords correctly reports an empty allocation report");
+    }
+
+    // ---- self-tracing --------------------------------------------------------------------------
+
+    private static async Task CollectSelfAllocationReportAsync(MemoryIntrospector introspector, ILogger logger)
+    {
+        Section(logger, "allocation report of THIS process (self-tracing)");
+
+        int selfPid = Environment.ProcessId;
+        using var stop = new CancellationTokenSource();
+
+        // Allocate a type that exists nowhere else, so its presence in the report proves the
+        // capture really observed this process's own allocations.
+        var work = Task.Run(() => AllocateSelfMarkers(stop.Token));
+        try
+        {
+            var report = await introspector.CollectAllocationReportAsync(selfPid, TimeSpan.FromSeconds(6), count: 12);
+
+            Assert(!report.IsEmpty, "expected allocation events when tracing the current process");
+
+            var table = new StringWriter();
+            AllocationTracing.Write(table, report);
+            foreach (var line in table.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                logger.LogInformation("  {0}", line.TrimEnd());
+            }
+
+            Assert(report.Types.Any(t => t.TypeName.Contains(nameof(SelfAllocationMarker))),
+                $"expected the self-allocated marker type in the report, got: {string.Join(" | ", report.Types.Take(6).Select(t => t.TypeName))}");
+            logger.LogInformation("  self-tracing works: {0} observed in this process's own allocation report", nameof(SelfAllocationMarker));
+        }
+        finally
+        {
+            stop.Cancel();
+            try { await work; } catch { }
+        }
+    }
+
+    /// <summary>A type allocated only by the self-tracing scenario, used as a marker in the report.</summary>
+    private sealed class SelfAllocationMarker
+    {
+        public byte[] Payload = new byte[16 * 1024];
+    }
+
+    private static void AllocateSelfMarkers(CancellationToken ct)
+    {
+        var keep = new List<SelfAllocationMarker>();
+        while (!ct.IsCancellationRequested)
+        {
+            for (int i = 0; i < 100; i++)
+            {
+                keep.Add(new SelfAllocationMarker());
+            }
+            if (keep.Count > 500) keep.RemoveRange(0, 400);
+            Thread.Sleep(1);
+        }
+        GC.KeepAlive(keep);
     }
 
     // ---- helpers -----------------------------------------------------------------------------

@@ -161,6 +161,71 @@ var top = introspector.ReportTopMethods("app.nettrace", count: 10);
 IReadOnlyList<int> pids = MemoryIntrospector.GetTraceableProcesses();
 ```
 
+### Which objects are being allocated?
+
+`CollectAllocationReportAsync` traces the CLR's allocation sampling events and reports what a
+process allocated over the interval, by type:
+
+```csharp
+var report = await introspector.CollectAllocationReportAsync(pid, TimeSpan.FromSeconds(10), count: 10);
+
+AllocationTracing.Write(Console.Out, report);
+```
+
+```
+Top 3 Allocated Types of 3 (16.66 GiB total, 167,438 AllocationTick events)
+Type                                                        Bytes        %          LOH    Objects
+1. System.Byte[]                                         16.65 GiB   99.99%           -          -
+2. System.InvalidOperationException                       1.73 MiB    0.01%           -          -
+3. System.GCMemoryInfoData                              104.29 KiB       0%           -          -
+```
+
+Each `AllocatedType` carries `AllocatedBytes`, `AllocatedBytesPercent`, `SampleCount` and the
+`SmallObjectHeapBytes` / `LargeObjectHeapBytes` split — a type showing bytes in the LOH column
+is allocating objects past the 85,000 byte threshold.
+
+To keep the underlying `.nettrace`, or to run the report over a file you already have:
+
+```csharp
+// keep the trace as well as the report
+var report = await introspector.CollectAllocationReportAsync(pid, TimeSpan.FromSeconds(10),
+                                                             outputPath: "allocations.nettrace");
+
+// or drive the capture yourself and report afterwards
+var trace  = await introspector.CollectTraceAsync(pid, AllocationTracing.CreateOptions(TimeSpan.FromSeconds(10), "allocations.nettrace"));
+var report = trace.TopAllocatedTypes(count: 20);
+trace.WriteAllocationReport(Console.Out, count: 20);
+
+// or analyse a .nettrace captured earlier
+var offline = introspector.ReportTopAllocatedTypes("allocations.nettrace", count: 20);
+```
+
+A few things worth knowing:
+
+  * The numbers come from `GCAllocationTick`, which the runtime emits once per ~100 KB
+    allocated. That makes allocated **bytes per type** accurate, but there are no per-object
+    counts — `ObjectCount` stays 0 unless the runtime emitted the per-object
+    `GCSampledObjectAllocation` events instead.
+  * Allocation tracing is verbose. An allocation-heavy process can produce tens of MB of events
+    per second, so prefer short intervals and raise `CircularBufferSizeInMB` if events drop.
+  * A trace captured without `AllocationTracing.RequiredClrEvents` reports
+    `AllocationReport.IsEmpty` rather than throwing.
+
+### Profiling a process from inside itself
+
+Every capture works against the current process — pass `Environment.ProcessId` and the library
+connects to its own diagnostics endpoint:
+
+```csharp
+var report = await introspector.CollectAllocationReportAsync(Environment.ProcessId, TimeSpan.FromSeconds(10));
+```
+
+The tracing machinery does allocate a little while it runs (mostly the
+`StreamCopyBufferSizeInBytes` pump buffer, which lands on the LOH at its 1 MB default), so it
+shows up in its own report. Measured against an otherwise idle process it came to ~1.7 MiB over
+6 seconds — around 0.03% of the same self-trace with a real workload running. Use
+`SamplingExcludedModules` if you want the library's own frames kept out of method reports.
+
 ### Tracing very large processes
 
 Both the runtime-side circular buffer and the client-side stream buffer are exposed, the same

@@ -147,6 +147,55 @@ namespace Memory.Introspect
         }
 
         /// <summary>
+        /// Collects a trace configured for allocation profiling and reports which objects the
+        /// process allocated over <paramref name="duration"/>, ordered by allocated bytes.
+        /// </summary>
+        /// <param name="processId">The process to trace.</param>
+        /// <param name="duration">How long to record for.</param>
+        /// <param name="count">How many types to report.</param>
+        /// <param name="outputPath">Optionally keep the underlying .nettrace at this path.</param>
+        /// <param name="cancellationToken">Cancels the capture, keeping whatever was collected.</param>
+        /// <remarks>
+        /// Allocation tracing is verbose — an allocation-heavy process can emit tens of MB of
+        /// events per second — so prefer short intervals, and raise
+        /// <see cref="MemoryIntrospectorOptions.CircularBufferSizeInMB"/> if events are dropped.
+        /// </remarks>
+        public async Task<AllocationReport> CollectAllocationReportAsync(
+            int processId,
+            TimeSpan duration,
+            int count = 10,
+            string outputPath = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (duration <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(duration), "Duration must be positive.");
+            }
+
+            TraceResult trace = await CollectTraceAsync(processId, AllocationTracing.CreateOptions(duration, outputPath), cancellationToken).ConfigureAwait(false);
+
+            if (trace.Exception is not null)
+            {
+                throw trace.Exception;
+            }
+
+            if (!trace.Success)
+            {
+                return new AllocationReport();
+            }
+
+            return trace.TopAllocatedTypes(count, GetTextWriter());
+        }
+
+        /// <summary>
+        /// Reports the top allocated types of a previously captured .nettrace file.
+        /// </summary>
+        public AllocationReport ReportTopAllocatedTypes(string traceFilePath, int count = 10)
+        {
+            return AllocationTracing.FromFile(traceFilePath, count, GetTextWriter());
+        }
+
+        /// <summary>
         /// The process ids of all .NET processes on this machine that publish a diagnostics
         /// endpoint and can therefore be traced or dumped. The equivalent of
         /// <c>dotnet-trace ps</c>.

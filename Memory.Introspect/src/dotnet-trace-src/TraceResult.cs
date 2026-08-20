@@ -152,6 +152,33 @@ namespace Memory.Introspect.Trace
             TraceReport.WriteTopMethodsReport(output, TopMethods(count, inclusive, excludedModules, blockingMethodPatterns), inclusive, verbose);
         }
 
+        /// <summary>
+        /// Reports which objects were allocated during the traced interval and how many bytes
+        /// went to each type, ordered by allocated bytes descending.
+        /// </summary>
+        /// <param name="count">How many types to keep.</param>
+        /// <param name="log">Optional log.</param>
+        /// <remarks>
+        /// Requires the capture to have enabled <see cref="AllocationTracing.RequiredClrEvents"/>
+        /// at <see cref="AllocationTracing.RequiredClrEventLevel"/> — use
+        /// <see cref="AllocationTracing.CreateOptions"/> to get that configuration. When the
+        /// trace has no allocation events the returned report is
+        /// <see cref="AllocationReport.IsEmpty"/> rather than an error.
+        /// </remarks>
+        public AllocationReport TopAllocatedTypes(int count = 10, TextWriter log = null)
+        {
+            return WithTraceFile(traceFile => AllocationTracing.FromFile(traceFile, count, log), requireStableName: false);
+        }
+
+        /// <summary>
+        /// Writes a per-type allocation table for this trace. See <see cref="TopAllocatedTypes"/>
+        /// for what the capture needs to have enabled.
+        /// </summary>
+        public void WriteAllocationReport(TextWriter output, int count = 10, bool verbose = false)
+        {
+            AllocationTracing.Write(output, TopAllocatedTypes(count), verbose);
+        }
+
         // Runs an action against a .nettrace file on disk, materialising an in-memory capture to
         // a temporary file first (and cleaning it up afterwards) when that is what we have.
         private T WithTraceFile<T>(Func<string, T> action, bool requireStableName)
