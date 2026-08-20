@@ -4,11 +4,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
-    <Version>0.0.47</Version>
+    <Version>0.0.48</Version>
     <PackageId>Memory.Introspect</PackageId>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
-    <Description>Programmatic .gcdump capture for .NET</Description>
-    <PackageTags>gcdump;dotnet-gcdump;memory;heap;profiling;diagnostics;gc;debug;analysis;eventpipe;leak</PackageTags>
+    <Description>Programmatic .gcdump, .dmp and .nettrace capture for .NET</Description>
+    <PackageTags>gcdump;dotnet-gcdump;dotnet-trace;dotnet-dump;nettrace;trace;tracing;speedscope;memory;heap;profiling;diagnostics;gc;debug;analysis;eventpipe;leak</PackageTags>
     <Authors>Curiosity GmbH</Authors>
     <Company>Curiosity GmbH</Company>
     <Copyright>(c) Copyright 2025 Curiosity GmbH - all right reserved</Copyright>

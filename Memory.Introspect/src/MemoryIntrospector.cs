@@ -62,6 +62,100 @@ namespace Memory.Introspect
                 cancellationToken);
         }
 
+        /// <summary>
+        /// Collects an EventPipe trace from <paramref name="processId"/> for
+        /// <paramref name="duration"/> using the default profiles ("dotnet-common" +
+        /// "dotnet-sampled-thread-time"), buffering it in memory. The programmatic equivalent of
+        /// <c>dotnet-trace collect --duration ...</c>.
+        /// </summary>
+        public Task<TraceResult> CollectTraceAsync(int processId, TimeSpan duration, CancellationToken cancellationToken = default)
+        {
+            if (duration <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(duration), "Duration must be positive.");
+            }
+
+            return CollectTraceAsync(processId, new TraceCollectionOptions { Duration = duration }, cancellationToken);
+        }
+
+        /// <summary>
+        /// Collects an EventPipe trace from <paramref name="processId"/>. The programmatic
+        /// equivalent of <c>dotnet-trace collect</c>: providers, profiles, CLR event keywords,
+        /// rundown control, stopping events, buffer sizing and format conversion are all
+        /// configured through <paramref name="options"/>.
+        /// </summary>
+        /// <remarks>
+        /// Set <see cref="TraceCollectionOptions.OutputPath"/> to stream straight to disk, and
+        /// raise <see cref="TraceCollectionOptions.CircularBufferSizeInMB"/> (it defaults to
+        /// <see cref="MemoryIntrospectorOptions.CircularBufferSizeInMB"/>) when tracing a very
+        /// large or very chatty process, otherwise the runtime will drop events.
+        /// </remarks>
+        public Task<TraceResult> CollectTraceAsync(int processId, TraceCollectionOptions options, CancellationToken cancellationToken = default)
+        {
+            return TraceCollector.CollectAsync(
+                processId,
+                options ?? new TraceCollectionOptions(),
+                _options.DiagnosticPort,
+                _options.CircularBufferSizeInMB,
+                GetTextWriter(),
+                cancellationToken);
+        }
+
+        /// <summary>
+        /// The built-in tracing profiles, the equivalent of <c>dotnet-trace list-profiles</c>.
+        /// </summary>
+        public static IReadOnlyList<TraceProfile> ListTraceProfiles() => TraceProfiles.All;
+
+        /// <summary>
+        /// Converts a .nettrace file to another format, the equivalent of
+        /// <c>dotnet-trace convert</c>. Returns the path that was written.
+        /// </summary>
+        /// <param name="traceFilePath">The .nettrace file to convert.</param>
+        /// <param name="format">The target format.</param>
+        /// <param name="outputPath">Where to write. When null it is derived from the input path.</param>
+        public string ConvertTraceFile(string traceFilePath, TraceFileFormat format, string outputPath = null)
+        {
+            if (string.IsNullOrEmpty(traceFilePath))
+            {
+                throw new ArgumentNullException(nameof(traceFilePath));
+            }
+
+            if (!File.Exists(traceFilePath))
+            {
+                throw new FileNotFoundException("Trace file not found.", traceFilePath);
+            }
+
+            string resolved = TraceFileFormatConverter.GetConvertedFilename(traceFilePath, outputPath, format);
+            TraceFileFormatConverter.ConvertToFormat(format, traceFilePath, resolved, GetTextWriter());
+            return Path.GetFullPath(resolved);
+        }
+
+        /// <summary>
+        /// Computes the top N methods of a previously captured .nettrace file, the equivalent of
+        /// <c>dotnet-trace report topN</c>.
+        /// </summary>
+        public IReadOnlyList<SampledMethod> ReportTopMethods(
+            string traceFilePath,
+            int count = 5,
+            bool inclusive = false,
+            IEnumerable<string> excludedModules = null,
+            IEnumerable<string> blockingMethodPatterns = null)
+        {
+            IReadOnlyList<string> modules = excludedModules is null ? null : (excludedModules as IReadOnlyList<string>) ?? new List<string>(excludedModules);
+            IReadOnlyList<string> blocking = blockingMethodPatterns is null ? null : (blockingMethodPatterns as IReadOnlyList<string>) ?? new List<string>(blockingMethodPatterns);
+            return TraceReport.TopMethodsFromFile(traceFilePath, count, inclusive, modules, blocking, GetTextWriter());
+        }
+
+        /// <summary>
+        /// The process ids of all .NET processes on this machine that publish a diagnostics
+        /// endpoint and can therefore be traced or dumped. The equivalent of
+        /// <c>dotnet-trace ps</c>.
+        /// </summary>
+        public static IReadOnlyList<int> GetTraceableProcesses()
+        {
+            return new List<int>(Memory.Introspect.Diagnostics.NETCore.Client.DiagnosticsClient.GetPublishedProcesses());
+        }
+
         public async Task<MemoryGraphResult> CollectMemoryGraphAsync(int processId, CancellationToken cancellationToken = default)
         {
             DotNetHeapInfo heapInfo = new();

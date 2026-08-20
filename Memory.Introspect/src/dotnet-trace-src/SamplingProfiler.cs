@@ -186,102 +186,27 @@ namespace Memory.Introspect.Trace
             IReadOnlyList<string> blockingMethodPatterns,
             TextWriter log)
         {
-            log ??= TextWriter.Null;
             if (netTraceData is null || netTraceData.Length == 0)
             {
                 return Array.Empty<SampledMethod>();
             }
 
-            // Build module prefixes once so we can do a cheap StartsWith check per frame.
-            string[] modulePrefixes = (excludedModules ?? DefaultExcludedModules)
-                .Where(m => !string.IsNullOrWhiteSpace(m))
-                .Select(m => m.EndsWith("!") ? m : m + "!")
-                .ToArray();
-
             string traceFile = Path.Combine(Path.GetTempPath(), $"memory-introspect-sample-{Guid.NewGuid():N}.nettrace");
             File.WriteAllBytes(traceFile, netTraceData);
-
-            string etlxFile = null;
             try
             {
-                etlxFile = TraceLog.CreateFromEventPipeDataFile(traceFile);
-
-                using SymbolReader symbolReader = new(log) { SymbolPath = SymbolPath.MicrosoftSymbolServerPath };
-                using TraceLog eventLog = new(etlxFile);
-
-                MutableTraceEventStackSource stackSource = new(eventLog) { OnlyManagedCodeStacks = true };
-
-                SampleProfilerThreadTimeComputer computer = new(eventLog, symbolReader);
-                computer.GenerateThreadTimeStacks(stackSource);
-
-                string excludeRegEx = null;
-                if (blockingMethodPatterns is { Count: > 0 })
-                {
-                    // FilterStackSource treats ExcludeRegExs as semicolon-separated patterns;
-                    // a sample is excluded if any frame in its stack matches any of them. We
-                    // use this to drop stacks whose threads are parked in a blocking wait so
-                    // they do not dominate the top-N report.
-                    //
-                    // Patterns get run through ToDotNetRegEx() which Regex.Escape's the input
-                    // unless it starts with '@'. We want the raw .NET regex semantics (so e.g.
-                    // \b actually means a word boundary instead of a literal '\b'), so the '@'
-                    // prefix is added here.
-                    excludeRegEx = string.Join(";", blockingMethodPatterns
-                        .Where(p => !string.IsNullOrWhiteSpace(p))
-                        .Select(p => p.StartsWith("@") ? p : "@" + p));
-                }
-
-                FilterParams filterParams = new()
-                {
-                    FoldRegExs    = "CPU_TIME;UNMANAGED_CODE_TIME;{Thread (}",
-                    ExcludeRegExs = excludeRegEx,
-                };
-                FilterStackSource filterStack = new(filterParams, stackSource, ScalingPolicyKind.ScaleToData);
-                CallTree callTree = new(ScalingPolicyKind.ScaleToData) { StackSource = filterStack };
-
-                List<CallTreeNodeBase> nodes = inclusive
-                    ? callTree.ByID.OrderByDescending(n => Math.Abs(n.InclusiveMetric)).ToList()
-                    : callTree.ByIDSortedExclusiveMetric();
-
-                var unwanted = new[] { "ROOT", "Process" };
-
-                var output = new List<SampledMethod>(count);
-                foreach (CallTreeNodeBase node in nodes)
-                {
-                    if (output.Count >= count) break;
-                    string name = node.Name;
-                    if (string.IsNullOrEmpty(name)) continue;
-                    if (unwanted.Any(u => name.Contains(u))) continue;
-                    if (IsFromExcludedModule(name, modulePrefixes)) continue;
-
-                    output.Add(new SampledMethod
-                    {
-                        Name = name,
-                        InclusiveMetric = node.InclusiveMetric,
-                        ExclusiveMetric = node.ExclusiveMetric,
-                        InclusiveMetricPercent = node.InclusiveMetricPercent,
-                        ExclusiveMetricPercent = node.ExclusiveMetricPercent,
-                    });
-                }
-                return output;
+                return TraceReport.TopMethodsFromFile(
+                    traceFile,
+                    count,
+                    inclusive,
+                    excludedModules ?? DefaultExcludedModules,
+                    blockingMethodPatterns ?? DefaultBlockingMethodPatterns,
+                    log);
             }
             finally
             {
-                TryDelete(etlxFile);
                 TryDelete(traceFile);
             }
-        }
-
-        private static bool IsFromExcludedModule(string frameName, string[] modulePrefixes)
-        {
-            for (int i = 0; i < modulePrefixes.Length; i++)
-            {
-                if (frameName.StartsWith(modulePrefixes[i], StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-            return false;
         }
 
         private static void TryDelete(string path)

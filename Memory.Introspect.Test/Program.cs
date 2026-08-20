@@ -5,43 +5,12 @@ using Microsoft.Extensions.Logging;
 
 if (args.Length > 0 && args[0] == "child")
 {
-    // Busy-loop in a couple of named methods so the sampling profiler has something to capture,
-    // plus a couple of threads parked on blocking primitives — without the blocked-thread
-    // filter these would dominate the top-N report on a mostly-idle process.
-    var stop  = new CancellationTokenSource();
-    var mres  = new ManualResetEventSlim(false);
-    AppDomain.CurrentDomain.ProcessExit += (_, _) => { stop.Cancel(); mres.Set(); };
-    var t1 = Task.Run(() => SpinHot(stop.Token));
-    var t2 = Task.Run(() => SpinWarm(stop.Token));
-    var t3 = Task.Run(() => BlockedOnMres(mres, stop.Token));
-    var t4 = Task.Run(() => BlockedOnMonitor(stop.Token));
-    try { await Task.Delay(-1, stop.Token); } catch { }
+    // The traced workload: CPU burn in a couple of named methods, allocation churn that
+    // forces real GCs, exceptions, a custom EventSource, plus a couple of threads parked on
+    // blocking primitives — without the blocked-thread filter those would dominate the top-N
+    // report on a mostly-idle process.
+    await Memory.Introspect.Test.Workload.RunAsync();
     return;
-
-    static void SpinHot(CancellationToken ct)
-    {
-        double x = 1.0001;
-        while (!ct.IsCancellationRequested)
-        {
-            for (int i = 0; i < 10_000; i++) x = Math.Sqrt(x + i);
-        }
-    }
-    static void SpinWarm(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested) Thread.SpinWait(1_000_000);
-    }
-    static void BlockedOnMres(ManualResetEventSlim mres, CancellationToken ct)
-    {
-        try { mres.Wait(ct); } catch (OperationCanceledException) { }
-    }
-    static void BlockedOnMonitor(CancellationToken ct)
-    {
-        var gate = new object();
-        lock (gate)
-        {
-            while (!ct.IsCancellationRequested) Monitor.Wait(gate, 1000);
-        }
-    }
 }
 
 var childProcess = new Process
@@ -87,6 +56,11 @@ try
     logger.LogInformation("Finished creating memory dump file: {0}", dumpFile);
 
     await ReportSampleAsync(introspector, currentPid, "child process", logger);
+
+    // dotnet-trace equivalent scenarios against the child process.
+    var traceOutputDirectory = Path.Combine(Directory.GetCurrentDirectory(), $"trace-{DateTimeOffset.UtcNow:yyyy-MM-dd-HH-mm-ss}");
+    await Memory.Introspect.Test.TraceScenarios.RunAllAsync(introspector, currentPid, traceOutputDirectory, logger);
+    logger.LogInformation("All dotnet-trace scenarios passed; artifacts in {0}", traceOutputDirectory);
 
     // Demonstrate self-sampling: spin up some busy work in this process and sample it.
     int selfPid = Process.GetCurrentProcess().Id;
