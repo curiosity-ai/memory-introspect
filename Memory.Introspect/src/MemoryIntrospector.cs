@@ -188,11 +188,58 @@ namespace Memory.Introspect
         }
 
         /// <summary>
+        /// Collects an allocation report that also resolves the call stacks the allocations came
+        /// from, answering "where in the code did these bytes come from".
+        /// </summary>
+        /// <remarks>
+        /// This costs more than <see cref="CollectAllocationReportAsync(int, TimeSpan, int, string, CancellationToken)"/>
+        /// at both ends: the capture turns rundown on so jitted frames can be named, which makes
+        /// stopping slower and the trace larger, and the analysis converts the trace to ETLX,
+        /// which is slow on a large capture. Prefer short durations.
+        /// </remarks>
+        public async Task<AllocationReport> CollectAllocationReportAsync(
+            int processId,
+            TimeSpan duration,
+            int count,
+            string outputPath,
+            bool resolveCallStacks,
+            CancellationToken cancellationToken = default)
+        {
+            if (duration <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(duration), "Duration must be positive.");
+            }
+
+            TraceResult trace = await CollectTraceAsync(
+                processId,
+                AllocationTracing.CreateOptions(duration, outputPath, resolveCallStacks),
+                cancellationToken).ConfigureAwait(false);
+
+            if (trace.Exception is not null)
+            {
+                throw trace.Exception;
+            }
+
+            if (!trace.Success)
+            {
+                return new AllocationReport();
+            }
+
+            return trace.TopAllocatedTypes(count, GetTextWriter(), resolveCallStacks);
+        }
+
+        /// <summary>
         /// Reports the top allocated types of a previously captured .nettrace file.
         /// </summary>
-        public AllocationReport ReportTopAllocatedTypes(string traceFilePath, int count = 10)
+        /// <param name="traceFilePath">The .nettrace file to analyse.</param>
+        /// <param name="count">How many types — and, when resolved, call stacks — to report.</param>
+        /// <param name="resolveCallStacks">
+        /// Also report the call stacks the allocations came from. Only produces named frames if
+        /// the trace was captured with rundown.
+        /// </param>
+        public AllocationReport ReportTopAllocatedTypes(string traceFilePath, int count = 10, bool resolveCallStacks = false)
         {
-            return AllocationTracing.FromFile(traceFilePath, count, GetTextWriter());
+            return AllocationTracing.FromFile(traceFilePath, count, GetTextWriter(), resolveCallStacks);
         }
 
         /// <summary>

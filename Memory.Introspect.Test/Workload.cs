@@ -63,7 +63,7 @@ internal static class Workload
 
     // Allocates enough short- and mid-lived objects to keep gen0/gen1 collections coming, so
     // the GC keywords in the traced profiles actually produce events.
-    private static void AllocateGarbage(CancellationToken ct)
+    internal static void AllocateGarbage(CancellationToken ct)
     {
         var survivors = new List<byte[]>();
         int i = 0;

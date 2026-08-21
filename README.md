@@ -211,6 +211,57 @@ A few things worth knowing:
   * A trace captured without `AllocationTracing.RequiredClrEvents` reports
     `AllocationReport.IsEmpty` rather than throwing.
 
+### Where did the allocations come from?
+
+EventPipe already records a call stack for every allocation event. What it cannot do without
+rundown is give you the method names to resolve those stacks against — so asking for call
+stacks turns rundown on:
+
+```csharp
+var report = await introspector.CollectAllocationReportAsync(
+    pid, TimeSpan.FromSeconds(10), count: 10, outputPath: null, resolveCallStacks: true);
+
+AllocationTracing.WriteCallStacks(Console.Out, report);
+```
+
+```
+Top 3 Allocating Call Stacks
+
+1. 44.35 GiB (100%)  System.Byte[]
+      Workload.AllocateGarbage(CancellationToken)
+   <- Workload+<>c__DisplayClass0_0.<RunAsync>b__3()
+   <- ExecutionContext.RunFromThreadPoolDispatchLoop(...)
+   <- Task.ExecuteWithThreadLocal(...)
+   <- ThreadPoolWorkQueue.Dispatch()
+```
+
+Each `AllocationCallStack` carries `AllocatedBytes`, `AllocatedBytesPercent`, `SampleCount`, the
+dominant `TypeName` allocated through it, and `Frames` (allocating method first). Stacks are
+aggregated by their full frame list, so two different paths into the same allocating method stay
+separate.
+
+The same flag works on the lower-level entry points:
+
+```csharp
+// drive the capture yourself
+var trace  = await introspector.CollectTraceAsync(pid,
+    AllocationTracing.CreateOptions(TimeSpan.FromSeconds(10), "alloc.nettrace", resolveCallStacks: true));
+var report = trace.TopAllocatedTypes(count: 10, resolveCallStacks: true);
+
+// or analyse a file captured earlier (its frames only resolve if it was captured with rundown)
+var offline = introspector.ReportTopAllocatedTypes("alloc.nettrace", count: 10, resolveCallStacks: true);
+```
+
+It costs more at both ends, which is why it is opt-in:
+
+  * **Capture** — rundown makes stopping the session slower and the trace larger.
+  * **Analysis** — the per-type tally streams the trace and is stack-blind; resolving stacks
+    needs `TraceLog`, which converts the trace to ETLX first. That is slow on a large capture.
+
+Prefer short durations. `AllocationReport.HasCallStacks` tells you whether a given report
+carries them; asking a rundown-less trace for stacks yields unnamed `?` frames rather than an
+error.
+
 ### Profiling a process from inside itself
 
 Every capture works against the current process — pass `Environment.ProcessId` and the library

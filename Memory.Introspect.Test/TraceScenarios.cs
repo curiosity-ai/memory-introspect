@@ -25,6 +25,7 @@ internal static class TraceScenarios
         await CollectWithLargeBuffersAsync(introspector, pid, outputDirectory, logger);
         await CollectCancelledAsync(introspector, pid, logger);
         await CollectAllocationReportAsync(introspector, pid, outputDirectory, logger);
+        await CollectAllocationCallStacksAsync(introspector, pid, outputDirectory, logger);
         await CollectSelfAllocationReportAsync(introspector, logger);
     }
 
@@ -365,6 +366,59 @@ internal static class TraceScenarios
         AssertSuccess(noAlloc, logger);
         Assert(noAlloc.TopAllocatedTypes().IsEmpty, "a trace without allocation events should report an empty allocation report");
         logger.LogInformation("  a trace without allocation keywords correctly reports an empty allocation report");
+    }
+
+    // ---- allocation call stacks ------------------------------------------------------------------
+
+    private static async Task CollectAllocationCallStacksAsync(MemoryIntrospector introspector, int pid, string dir, ILogger logger)
+    {
+        Section(logger, "allocation call stacks (where the allocations came from)");
+
+        string output = Path.Combine(dir, "allocation-stacks.nettrace");
+
+        var report = await introspector.CollectAllocationReportAsync(
+            pid, TimeSpan.FromSeconds(6), count: 8, outputPath: output, resolveCallStacks: true);
+
+        Assert(!report.IsEmpty, "expected allocation events in the trace");
+        Assert(report.HasCallStacks, "expected resolved call stacks");
+        Assert(report.CallStacks.Count <= 8, "the top-N trim was not applied to call stacks");
+
+        var table = new StringWriter();
+        AllocationTracing.WriteCallStacks(table, report, maxFrames: 6);
+        foreach (var line in table.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            logger.LogInformation("  {0}", line.TrimEnd());
+        }
+
+        // Every reported stack must carry named frames — an unnamed stack means rundown did not
+        // make it into the capture, which is the whole failure mode this option exists to avoid.
+        foreach (var stack in report.CallStacks)
+        {
+            Assert(stack.Frames.Count > 0, "a reported call stack had no frames");
+            Assert(stack.Frames.Any(f => f != "?"), $"call stack resolved to nothing but '?' frames: {string.Join(" <- ", stack.Frames.Take(3))}");
+            Assert(stack.AllocatedBytes > 0, "a reported call stack allocated no bytes");
+        }
+
+        Assert(report.CallStacks.Sum(s => s.AllocatedBytesPercent) <= 100.001,
+            "call stack percentages must not exceed 100");
+
+        // The workload's allocating methods must be identifiable by name.
+        var allFrames = string.Join(" | ", report.CallStacks.SelectMany(s => s.Frames));
+        Assert(allFrames.Contains(nameof(Workload.AllocateGarbage)),
+            $"expected {nameof(Workload.AllocateGarbage)} among the allocating frames");
+        logger.LogInformation("  resolved {0} call stacks; {1} is attributed by name", report.CallStacks.Count, nameof(Workload.AllocateGarbage));
+
+        // Reading the same file back offline must agree.
+        var offline = introspector.ReportTopAllocatedTypes(output, count: 8, resolveCallStacks: true);
+        Assert(offline.HasCallStacks, "offline analysis produced no call stacks");
+        Assert(offline.CallStacks[0].AllocatedBytes == report.CallStacks[0].AllocatedBytes,
+            "offline call stack analysis disagrees with the in-flight report");
+
+        // And without the flag the same file yields the cheap per-type report only.
+        var cheap = introspector.ReportTopAllocatedTypes(output, count: 8);
+        Assert(!cheap.HasCallStacks, "call stacks must not be resolved unless asked for");
+        Assert(cheap.TotalAllocatedBytes == report.TotalAllocatedBytes, "the per-type totals must not depend on stack resolution");
+        logger.LogInformation("  opting out of stack resolution keeps the per-type totals identical");
     }
 
     // ---- self-tracing --------------------------------------------------------------------------

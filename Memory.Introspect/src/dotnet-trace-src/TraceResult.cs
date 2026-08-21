@@ -165,9 +165,13 @@ namespace Memory.Introspect.Trace
         /// trace has no allocation events the returned report is
         /// <see cref="AllocationReport.IsEmpty"/> rather than an error.
         /// </remarks>
-        public AllocationReport TopAllocatedTypes(int count = 10, TextWriter log = null)
+        /// <param name="resolveCallStacks">
+        /// Also report the call stacks the allocations came from. Only produces named frames if
+        /// the capture included rundown — see <see cref="AllocationTracing.CreateOptions"/>.
+        /// </param>
+        public AllocationReport TopAllocatedTypes(int count = 10, TextWriter log = null, bool resolveCallStacks = false)
         {
-            return WithTraceFile(traceFile => AllocationTracing.FromFile(traceFile, count, log), requireStableName: false);
+            return WithTraceFile(traceFile => AllocationTracing.FromFile(traceFile, count, log, resolveCallStacks), requireStableName: false);
         }
 
         /// <summary>
