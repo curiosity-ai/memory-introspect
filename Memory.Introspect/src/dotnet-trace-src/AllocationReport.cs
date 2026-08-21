@@ -12,6 +12,7 @@ using System.Diagnostics.Tracing;
 using System.IO;
 using System.Linq;
 using Microsoft.Diagnostics.Tracing;
+using Microsoft.Diagnostics.Tracing.Etlx;
 using Microsoft.Diagnostics.Tracing.Parsers.Clr;
 
 namespace Memory.Introspect.Trace
@@ -70,6 +71,34 @@ namespace Memory.Introspect.Trace
     }
 
     /// <summary>
+    /// One call stack that allocated, and how many bytes went through it.
+    /// </summary>
+    public sealed class AllocationCallStack
+    {
+        /// <summary>Total bytes attributed to allocations made through this stack.</summary>
+        public long AllocatedBytes { get; internal set; }
+
+        /// <summary>This stack's share of all allocated bytes, as a percentage.</summary>
+        public double AllocatedBytesPercent { get; internal set; }
+
+        /// <summary>How many allocation sampling events were attributed to this stack.</summary>
+        public long SampleCount { get; internal set; }
+
+        /// <summary>
+        /// The type contributing the most bytes through this stack. A single stack can allocate
+        /// more than one type — a helper that builds both a buffer and a string, say — in which
+        /// case this names the larger contributor.
+        /// </summary>
+        public string TypeName { get; internal set; }
+
+        /// <summary>The frames, allocating method first, walking outwards to the thread root.</summary>
+        public IReadOnlyList<string> Frames { get; internal set; } = Array.Empty<string>();
+
+        public override string ToString() =>
+            $"{AllocatedBytes:N0} bytes ({AllocatedBytesPercent:0.##}%) via {(Frames.Count > 0 ? Frames[0] : "?")}";
+    }
+
+    /// <summary>
     /// A per-type breakdown of what a process allocated during a traced interval.
     /// </summary>
     public sealed class AllocationReport
@@ -88,6 +117,16 @@ namespace Memory.Introspect.Trace
 
         /// <summary>Which CLR event supplied the numbers.</summary>
         public AllocationSampleSource Source { get; internal set; }
+
+        /// <summary>
+        /// The call stacks the allocations came from, ordered by allocated bytes descending.
+        /// Empty unless the report was built with call stack resolution requested — see
+        /// <see cref="AllocationTracing.FromFile"/>.
+        /// </summary>
+        public IReadOnlyList<AllocationCallStack> CallStacks { get; internal set; } = Array.Empty<AllocationCallStack>();
+
+        /// <summary>True when this report carries resolved allocation call stacks.</summary>
+        public bool HasCallStacks => CallStacks.Count > 0;
 
         /// <summary>
         /// True when the trace contained no allocation events at all — usually because the
@@ -123,12 +162,20 @@ namespace Memory.Introspect.Trace
         /// </summary>
         /// <param name="duration">How long to record for.</param>
         /// <param name="outputPath">Where to stream the .nettrace. Null buffers it in memory.</param>
+        /// <param name="resolveCallStacks">
+        /// Capture what is needed to report *where* the allocations came from, not just which
+        /// types. EventPipe already records a call stack for every allocation event; what it
+        /// does not do without rundown is give you the method names to resolve those stacks
+        /// against, so this turns rundown on. That makes stopping the session slower and the
+        /// trace larger, which is why it is off by default.
+        /// </param>
         /// <remarks>
         /// Allocation tracing is verbose: an allocation-heavy process can produce tens of MB per
-        /// second. Rundown is left off because an allocation report resolves type names from the
-        /// events themselves and does not need jitted method symbols.
+        /// second. Rundown is left off unless <paramref name="resolveCallStacks"/> asks for it,
+        /// because the per-type report resolves type names from the events themselves and does
+        /// not need jitted method symbols.
         /// </remarks>
-        public static TraceCollectionOptions CreateOptions(TimeSpan duration, string outputPath = null)
+        public static TraceCollectionOptions CreateOptions(TimeSpan duration, string outputPath = null, bool resolveCallStacks = false)
         {
             return new TraceCollectionOptions
             {
@@ -136,7 +183,7 @@ namespace Memory.Introspect.Trace
                 ClrEvents = RequiredClrEvents,
                 ClrEventLevel = RequiredClrEventLevel,
                 OutputPath = outputPath,
-                Rundown = false,
+                Rundown = resolveCallStacks,
             };
         }
 
@@ -145,9 +192,15 @@ namespace Memory.Introspect.Trace
         /// <paramref name="count"/> allocated types.
         /// </summary>
         /// <param name="traceFilePath">The .nettrace file to analyse.</param>
-        /// <param name="count">How many types to keep. Pass <see cref="int.MaxValue"/> for all of them.</param>
+        /// <param name="count">How many types — and, when resolved, how many call stacks — to keep.</param>
         /// <param name="log">Optional log.</param>
-        public static AllocationReport FromFile(string traceFilePath, int count = 10, TextWriter log = null)
+        /// <param name="resolveCallStacks">
+        /// Also report the call stacks the allocations came from. This needs a second, more
+        /// expensive pass: stacks only resolve through TraceLog, which converts the trace to
+        /// ETLX first, and the frames are only named if the capture included rundown (see
+        /// <see cref="CreateOptions"/>).
+        /// </param>
+        public static AllocationReport FromFile(string traceFilePath, int count = 10, TextWriter log = null, bool resolveCallStacks = false)
         {
             log ??= TextWriter.Null;
 
@@ -249,6 +302,10 @@ namespace Memory.Introspect.Trace
 
             log.WriteLine($"[alloc] {chosenEvents:N0} {chosenSource} events over {chosen.Count:N0} types, {total:N0} bytes total");
 
+            IReadOnlyList<AllocationCallStack> callStacks = resolveCallStacks
+                ? ResolveCallStacks(traceFilePath, count, log)
+                : Array.Empty<AllocationCallStack>();
+
             return new AllocationReport
             {
                 Types = top,
@@ -256,7 +313,134 @@ namespace Memory.Introspect.Trace
                 DistinctTypeCount = chosen.Count,
                 SampleCount = chosenEvents,
                 Source = chosenSource,
+                CallStacks = callStacks,
             };
+        }
+
+        /// <summary>
+        /// Aggregates the call stacks attached to the allocation events, answering "which code
+        /// paths allocated these bytes" rather than only "which types".
+        /// </summary>
+        /// <remarks>
+        /// This is a separate, heavier pass than the per-type tally. That one streams the trace
+        /// through <see cref="EventPipeEventSource"/>, which is cheap but stack-blind; resolving
+        /// stacks needs <see cref="TraceLog"/>, which converts the trace to ETLX first and
+        /// stitches the rundown's method-load events onto the sampled instruction pointers.
+        /// </remarks>
+        private static IReadOnlyList<AllocationCallStack> ResolveCallStacks(string traceFilePath, int count, TextWriter log)
+        {
+            const int MaxFrames = 32;
+
+            string etlxPath = null;
+
+            try
+            {
+                etlxPath = TraceLog.CreateFromEventPipeDataFile(traceFilePath);
+
+                using TraceLog traceLog = new(etlxPath);
+
+                // Keyed by the whole frame list, so two different paths into the same allocating
+                // method stay separate — that distinction is the point of the report.
+                Dictionary<string, StackAggregate> byStack = new(StringComparer.Ordinal);
+                long total = 0;
+                long withStack = 0;
+                long withoutStack = 0;
+
+                foreach (TraceEvent data in traceLog.Events)
+                {
+                    if (data is not GCAllocationTickTraceData tick)
+                    {
+                        continue;
+                    }
+
+                    TraceCallStack callStack = data.CallStack();
+
+                    if (callStack is null)
+                    {
+                        withoutStack++;
+                        continue;
+                    }
+
+                    withStack++;
+
+                    List<string> frames = new(MaxFrames);
+
+                    for (TraceCallStack frame = callStack; frame is not null && frames.Count < MaxFrames; frame = frame.Caller)
+                    {
+                        string name = frame.CodeAddress.FullMethodName;
+                        frames.Add(string.IsNullOrEmpty(name) ? "?" : name);
+                    }
+
+                    if (frames.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    string key = string.Join("\n", frames);
+                    long bytes = tick.AllocationAmount64;
+                    total += bytes;
+
+                    if (!byStack.TryGetValue(key, out StackAggregate aggregate))
+                    {
+                        aggregate = new StackAggregate { Frames = frames.ToArray() };
+                        byStack[key] = aggregate;
+                    }
+
+                    aggregate.AllocatedBytes += bytes;
+                    aggregate.SampleCount++;
+
+                    if (!string.IsNullOrEmpty(tick.TypeName))
+                    {
+                        aggregate.BytesByType.TryGetValue(tick.TypeName, out long soFar);
+                        aggregate.BytesByType[tick.TypeName] = soFar + bytes;
+                    }
+                }
+
+                if (withStack == 0)
+                {
+                    log.WriteLine($"[alloc] No allocation call stacks could be read ({withoutStack:N0} events carried no stack).");
+                    return Array.Empty<AllocationCallStack>();
+                }
+
+                log.WriteLine($"[alloc] {withStack:N0} events with stacks aggregated into {byStack.Count:N0} distinct call stacks ({withoutStack:N0} without)");
+
+                return byStack.Values
+                    .OrderByDescending(a => a.AllocatedBytes)
+                    .Take(count < 0 ? 0 : count)
+                    .Select(a => new AllocationCallStack
+                    {
+                        AllocatedBytes = a.AllocatedBytes,
+                        AllocatedBytesPercent = total > 0 ? a.AllocatedBytes * 100.0 / total : 0,
+                        SampleCount = a.SampleCount,
+                        TypeName = a.BytesByType.Count == 0
+                            ? string.Empty
+                            : a.BytesByType.OrderByDescending(kv => kv.Value).First().Key,
+                        Frames = a.Frames,
+                    })
+                    .ToList();
+            }
+            catch (Exception ex)
+            {
+                // Never lose the per-type tally that has already been computed just because the
+                // heavier stack pass failed.
+                log.WriteLine($"[alloc] Failed to resolve allocation call stacks: {ex.Message}");
+                return Array.Empty<AllocationCallStack>();
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(etlxPath))
+                {
+                    try { File.Delete(etlxPath); } catch { /* best-effort cleanup */ }
+                }
+            }
+        }
+
+        private sealed class StackAggregate
+        {
+            public string[] Frames { get; set; } = Array.Empty<string>();
+            public long AllocatedBytes { get; set; }
+            public long SampleCount { get; set; }
+            public Dictionary<string, long> BytesByType { get; } = new(StringComparer.Ordinal);
         }
 
         /// <summary>
@@ -306,6 +490,52 @@ namespace Memory.Introspect.Trace
                     PadLeft($"{type.AllocatedBytesPercent:0.##}%", 9) +
                     PadLeft(type.LargeObjectHeapBytes > 0 ? FormatBytes(type.LargeObjectHeapBytes) : "-", 14) +
                     PadLeft(type.ObjectCount > 0 ? $"{type.ObjectCount:N0}" : "-", 12));
+            }
+        }
+
+        /// <summary>
+        /// Writes the call stacks the allocations came from, most bytes first.
+        /// </summary>
+        /// <param name="output">Where to write.</param>
+        /// <param name="report">A report built with call stack resolution requested.</param>
+        /// <param name="maxFrames">How many frames of each stack to print.</param>
+        public static void WriteCallStacks(TextWriter output, AllocationReport report, int maxFrames = 12)
+        {
+            if (output is null)
+            {
+                throw new ArgumentNullException(nameof(output));
+            }
+            if (report is null)
+            {
+                throw new ArgumentNullException(nameof(report));
+            }
+
+            if (!report.HasCallStacks)
+            {
+                output.WriteLine("[WARNING] No allocation call stacks in this report. Capture with AllocationTracing.CreateOptions(..., resolveCallStacks: true) and read it back with resolveCallStacks: true.");
+                return;
+            }
+
+            output.WriteLine($"Top {report.CallStacks.Count} Allocating Call Stacks");
+
+            int rank = 1;
+            foreach (AllocationCallStack stack in report.CallStacks)
+            {
+                output.WriteLine();
+                output.WriteLine($"{rank++}. {FormatBytes(stack.AllocatedBytes)} ({stack.AllocatedBytesPercent:0.##}%)" +
+                                 (string.IsNullOrEmpty(stack.TypeName) ? "" : $"  {stack.TypeName}"));
+
+                int printed = 0;
+                foreach (string frame in stack.Frames)
+                {
+                    if (printed >= maxFrames)
+                    {
+                        output.WriteLine($"      … {stack.Frames.Count - printed} more frame(s)");
+                        break;
+                    }
+                    output.WriteLine((printed == 0 ? "      " : "   <- ") + frame);
+                    printed++;
+                }
             }
         }
 
