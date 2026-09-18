@@ -24,6 +24,46 @@
     <None Include="..\logo.png" Pack="true" PackagePath="\" />
   </ItemGroup>
 
+  <!--
+    Ship the Claude skills (one root SKILL.md plus a references/ folder, written for
+    consumers of this library) inside the NuGet package so referencing projects get them
+    auto-extracted into their solution's `.claude/skills/memory-introspect/` folder.
+    The buildTransitive targets file performs the extraction on the consumer's machine;
+    see README.md.
+    Remove + re-Include so the skills\** glob owns the items (correct RecursiveDir)
+    and there is no duplicate with the SDK's default None items.
+  -->
+  <ItemGroup>
+    <None Remove="skills\**" />
+    <None Include="skills\**" Pack="true" PackagePath="skills\%(RecursiveDir)%(Filename)%(Extension)" />
+
+    <None Remove="buildTransitive\Memory.Introspect.targets" />
+    <None Include="buildTransitive\Memory.Introspect.targets" Pack="true" PackagePath="buildTransitive\Memory.Introspect.targets" />
+  </ItemGroup>
+
+  <!-- Stamp the package version into the skills payload as the single source of truth.
+       It ships via the skills\** glob above and, once copied, becomes the consumer's
+       installed-version marker, so re-copying only happens when the version changes. -->
+  <!-- NuGet excludes dot-prefixed files (like .skills-version) by default; allow them.
+       Safe here because the only dot-file packed is that marker. -->
+  <PropertyGroup>
+    <NoDefaultExcludes>true</NoDefaultExcludes>
+  </PropertyGroup>
+
+  <Target Name="_WriteSkillsVersion" BeforeTargets="Build;_GetPackageFiles">
+    <PropertyGroup>
+      <!-- Source file is named '.skills-version' and packed INTO the skills\ folder,
+           so it lands as skills\.skills-version (a file, keeping its own name).
+           Targeting PackagePath="skills\.skills-version" instead would make NuGet treat
+           the dot-segment as a folder and append the source filename. -->
+      <_SkillsVersionFile>$(IntermediateOutputPath).skills-version</_SkillsVersionFile>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(_SkillsVersionFile)" Lines="$(PackageVersion)" Overwrite="true" />
+    <ItemGroup>
+      <None Include="$(_SkillsVersionFile)" Pack="true" PackagePath="skills\" />
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.1.28" GeneratePathProperty="true" />
   </ItemGroup>

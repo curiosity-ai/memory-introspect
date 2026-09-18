@@ -50,7 +50,7 @@ var logger = loggerFactory.CreateLogger("Memory.Introspect");
 
 logger.LogInformation("Starting creating gcdump file from process {0}", currentPid);
 
-var result = await Memory.Introspect.Create(new() { Logger = logger, Verbose = true }).CollectMemoryGraphAsync(currentPid);
+var result = await MemoryIntrospector.Create(new() { Logger = logger, Verbose = true }).CollectMemoryGraphAsync(currentPid);
 
 if (result.Success)
 {
@@ -330,6 +330,62 @@ When initializing the `Memory.Introspect`, you can pass a configuration object:
 | `Timeout` | `TimeSpan` | *(Optional)* Set a maximum duration for the collection process before cancelling. Minimum of 30s.|
 | `CircularBufferSizeInMB` | `int` | The runtime's in-memory circular buffer, in MB (default 1024). Used by `.gcdump`, sampling and trace capture, and overridable per trace through `TraceCollectionOptions.CircularBufferSizeInMB`. |
 | `DiagnosticPort` | `string` | *(Optional)* Connect through a diagnostic port instead of a process id. |
+
+-----
+
+## 🧠 Claude skills for consuming projects
+
+The package ships a Claude skill that documents how to use this library — every capture type,
+its options, and worked examples. If the project referencing `Memory.Introspect` has a
+`.claude` folder anywhere at or above it, building that project extracts the skill into
+`.claude/skills/memory-introspect/`:
+
+```
+.claude/skills/memory-introspect/
+  SKILL.md                     # overview, capture-type decision table, reference index
+  references/
+    getting-started.md           trace-collect.md            profiles.md
+    providers-and-clrevents.md   custom-eventsource.md       stopping-events.md
+    cpu-sampling.md              allocation-tracing.md       allocation-call-stacks.md
+    gc-dump.md                   process-dump.md             formats-and-conversion.md
+    offline-reports.md           self-tracing.md             large-processes.md
+    diagnostic-ports.md          diagnostics-endpoint.md     ci-and-tests.md
+    api-reference.md             troubleshooting.md
+```
+
+There is nothing to configure. No `.claude` folder means the extraction does nothing, and the
+files are re-copied only when the package version changes — so an upgrade refreshes the
+documentation automatically.
+
+### How it works
+
+The plumbing is two files:
+
+  * [`Memory.Introspect/skills/`](Memory.Introspect/skills/) is the skill payload, packed into
+    the NuGet package's `skills/` folder. A `_WriteSkillsVersion` target in
+    [`Memory.Introspect.csproj`](Memory.Introspect/Memory.Introspect.csproj) stamps the package
+    version into `skills/.skills-version` as the single source of truth.
+  * [`Memory.Introspect/buildTransitive/Memory.Introspect.targets`](Memory.Introspect/buildTransitive/Memory.Introspect.targets)
+    is auto-imported by referencing projects (`buildTransitive/`, so it reaches transitive
+    consumers too). It walks up from the consuming project looking for a `.claude` folder,
+    compares the shipped `.skills-version` against the installed marker, and wipes and
+    re-copies the payload when they differ.
+
+The targets *filename* must stay `Memory.Introspect.targets` (= the `<PackageId>`) for NuGet to
+auto-import it; the install folder name is `memory-introspect` (the `name:` in `SKILL.md`) and
+is set by `_SkillsPackageId` inside the targets file.
+
+### Keeping the skill in sync
+
+The skill is documentation, and drifts if the code changes underneath it. When you change the
+public surface, update it in the same change:
+
+  * **New capture method or option** — update the relevant `references/*.md` (and the option
+    tables in `trace-collect.md` / `getting-started.md`), and `references/api-reference.md`.
+  * **New concept worth its own page** — add `references/<slug>.md` and list it in the
+    `SKILL.md` index.
+  * **Changed default or behaviour** — fix the tables that state it; several references quote
+    the same defaults.
 
 -----
 
