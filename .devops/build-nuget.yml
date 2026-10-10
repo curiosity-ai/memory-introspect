@@ -10,7 +10,11 @@ pool:
   vmImage: 'ubuntu-22.04'
 
 steps:
-- task: NuGetToolInstaller@0
+- task: NuGetToolInstaller@1
+  displayName: 'Use NuGet 7.6 or later'
+  inputs:
+    versionSpec: '>=7.6'
+    checkLatest: true
 
 
 - task: PowerShell@2
