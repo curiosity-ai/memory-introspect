@@ -1,6 +1,6 @@
 ---
 name: api-reference
-description: Complete public API surface of Memory.Introspect — every type and member of MemoryIntrospector, MemoryIntrospectorOptions, TraceCollectionOptions, TraceResult, SamplingProfileResult, AllocationReport, TraceProfiles, ClrEventKeywords, ProviderUtils, TraceReport, TraceFileFormatConverter and Dumper, grouped by namespace. Use when looking up a signature or checking what a type exposes.
+description: Complete public API surface of Memory.Introspect — every type and member of MemoryIntrospector, MemoryIntrospectorOptions, TraceCollectionOptions, TraceResult, SamplingProfileResult, AllocationReport, TraceProfiles, ClrEventKeywords, ProviderUtils, TraceReport, TraceFileFormatConverter, Dumper and the GcPauses types (GcPauseMonitor, GcPause, GcPauseDetailedReport), grouped by namespace. Use when looking up a signature or checking what a type exposes.
 ---
 
 # API reference
@@ -11,6 +11,7 @@ description: Complete public API surface of Memory.Introspect — every type and
 | --- | --- |
 | `Memory.Introspect` | `MemoryIntrospector`, `MemoryIntrospectorOptions`, `MemoryGraphResult`, `Dumper` |
 | `Memory.Introspect.Trace` | Everything tracing: options, results, reports, profiles, keywords, helpers |
+| `Memory.Introspect.GcPauses` | `GcPauseMonitor`, its options, `GcPause` and the detailed capture report |
 | `Memory.Introspect.Diagnostics.NETCore.Client` | `EventPipeProvider` (and the IPC client internals) |
 
 ## `MemoryIntrospector`
@@ -41,6 +42,10 @@ IReadOnlyList<SampledMethod> ReportTopMethods(string traceFilePath, int count = 
         IEnumerable<string> excludedModules = null, IEnumerable<string> blockingMethodPatterns = null);
 AllocationReport ReportTopAllocatedTypes(string traceFilePath, int count = 10, bool resolveCallStacks = false);
 string ConvertTraceFile(string traceFilePath, TraceFileFormat format, string outputPath = null);
+
+// GC pause monitoring
+Task<GcPauseMonitor> StartGcPauseMonitorAsync(int processId, GcPauseMonitorOptions options = null, CancellationToken ct = default);
+GcPauseDetailedReport ReportGcPauses(string traceFilePath, TimeSpan longPauseThreshold, bool resolveTriggerStacks = false);
 
 // Discovery
 static IReadOnlyList<TraceProfile> ListTraceProfiles();
@@ -260,6 +265,82 @@ partial class Dumper
     enum CollectionType { Full, Heap, Mini, Triage }
 }
 ```
+
+## GC pause monitoring (`Memory.Introspect.GcPauses`)
+
+```csharp
+sealed class GcPauseMonitor : IAsyncDisposable
+{
+    int ProcessId; bool StackwalkEnabled;
+    long EventsProcessed; long EventsLost; long PauseCount; long LongPauseCount;
+    TimeSpan TotalPauseTime; TimeSpan MaxPause;
+    IReadOnlyList<GcPause> RecentLongPauses;              // last RecentLongPauseCapacity, oldest first
+    IReadOnlyList<GcPauseDetailedReport> DetailedReports;
+    bool IsCapturingDetails;
+    Task<GcPauseDetailedReport> CaptureDetailsAsync(TimeSpan duration, CancellationToken ct = default);
+    Task StopAsync();
+}
+
+class GcPauseMonitorOptions
+{
+    TimeSpan LongPauseThreshold = 200ms;
+    Action<GcPause> OnPause; Action<GcPause> OnLongPause;
+    int CircularBufferSizeInMB = 16; int RecentLongPauseCapacity = 32;
+    GcPauseDetailedCaptureOptions DetailedCapture = new();
+}
+
+class GcPauseDetailedCaptureOptions
+{
+    bool Enabled = true; TimeSpan MaxDuration = 60s; TimeSpan? StopAfterLongPause = 2s;
+    string OutputDirectory;                                // null = <temp>/memory-introspect-gc-pauses
+    bool CollectStacks = true; bool VerboseGcEvents = true; bool ObjectSurvivalAndMovement = false;
+    bool CollectGcDump = false; int GcDumpTopTypes = 15;
+    int MaxCaptures = 3; TimeSpan Cooldown = 5min; int CircularBufferSizeInMB = 256;
+    Action<GcPauseDetailedReport> OnReport;
+}
+
+class GcPause
+{
+    DateTime StartTimeUtc; double PauseMSec; double SuspendMSec; double RestartMSec;
+    GCSuspendEEReason SuspendReason; GcCollectionInfo Gc;  // null for a non-GC suspension
+    bool IsLong; bool DuringDetailedCapture; GcPauseCause Cause; IReadOnlyList<string> Findings;
+    string Summary; string ToReport();
+}
+
+enum GcPauseCause { Unknown, TimeToSafePoint, Marking, Compaction, Sweeping, CardScanning, NonGcSuspension, BackgroundGc }
+
+class GcCollectionInfo
+{
+    int Number; int Generation; GCType Type; GCReason Reason; bool IsInduced; bool IsBlocking;
+    bool Compacted; bool CompactedLargeObjectHeap; GCPauseMode PauseMode; int MemoryLoadPercent;
+    GCGlobalMechanisms GlobalMechanisms; IReadOnlyList<gc_heap_compact_reason> CompactReasons;
+    IReadOnlyList<string> CondemnReasons; GcPhaseTimes Phases; IReadOnlyList<GcMarkRoot> MarkRoots;
+    IReadOnlyList<GcGenerationInfo> Generations; double DurationMSec; long PromotedBytes;
+    long HeapSizeAfterBytes; int PinnedObjectCount; int GCHandleCount; int SinkBlockCount;
+    long FinalizationPromotedCount; long FinalizationPromotedBytes; double LohCompactMSec;
+    int HeapCount; int TriggeringThreadId;
+}
+
+class GcPhaseTimes   { double MarkRootsMSec, MarkShortWeakMSec, MarkFinalizationMSec, MarkLongWeakMSec,
+                              PlanMSec, RelocateMSec, CompactMSec, SweepMSec, MarkMSec, PostMarkMSec; }
+class GcMarkRoot     { MarkRootType Kind; double MarkMSec; long PromotedBytes; }
+class GcGenerationInfo { Gens Generation; long SizeBeforeBytes, SizeAfterBytes,
+                         FragmentationBeforeBytes, FragmentationAfterBytes, SurvivedBytes; }
+
+class GcPauseDetailedReport
+{
+    GcPause Trigger; string TraceFilePath; long TraceSizeInBytes; TimeSpan Elapsed;
+    IReadOnlyList<GcPause> Pauses; IReadOnlyList<GcPause> LongPauses;
+    IReadOnlyList<GcTriggerSite> TriggerSites;            // who called GC.Collect / ran out the budget
+    AllocationReport Allocations; IReadOnlyList<GcPinnedType> PinnedTypes;
+    string GcDumpPath; IReadOnlyList<GcHeapType> HeapTypes; long HeapObjectCount; long HeapBytes;
+    Exception Exception; bool Success; string ToReport();
+}
+```
+
+`GCType`, `GCReason`, `GCSuspendEEReason`, `GCPauseMode`, `GCGlobalMechanisms`,
+`gc_heap_compact_reason`, `MarkRootType` and `Gens` are TraceEvent's enums from
+`Microsoft.Diagnostics.Tracing.Parsers.Clr`.
 
 ## `EventPipeProvider`
 

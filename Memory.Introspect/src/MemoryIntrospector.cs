@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 using Graphs;
+using Memory.Introspect.GcPauses;
 using Memory.Introspect.Trace;
 using Microsoft.Diagnostics.Tools.GCDump;
 using Microsoft.Extensions.Logging;
@@ -26,6 +27,8 @@ namespace Memory.Introspect
 
             return task;
         }
+
+        internal int MaxNodeCount => _options.MaxNodeCount;
 
         private MemoryIntrospector(MemoryIntrospectorOptions options)
         {
@@ -240,6 +243,41 @@ namespace Memory.Introspect
         public AllocationReport ReportTopAllocatedTypes(string traceFilePath, int count = 10, bool resolveCallStacks = false)
         {
             return AllocationTracing.FromFile(traceFilePath, count, GetTextWriter(), resolveCallStacks);
+        }
+
+        /// <summary>
+        /// Starts watching <paramref name="processId"/> for long GC pauses. A cheap always-on
+        /// session (GC events at Informational level, no stacks, no rundown) explains every pause
+        /// as it ends; a long one can escalate into a short detailed capture. Dispose the returned
+        /// monitor to stop it.
+        /// </summary>
+        public Task<GcPauseMonitor> StartGcPauseMonitorAsync(int processId, GcPauseMonitorOptions options = null, CancellationToken cancellationToken = default)
+        {
+            return GcPauseMonitor.StartAsync(processId, _options.DiagnosticPort, options, this, GetTextWriter(), cancellationToken);
+        }
+
+        /// <summary>
+        /// Analyses the GC pauses in a previously captured .nettrace file that includes GC events
+        /// (e.g. one written by a <see cref="GcPauseMonitor"/> detailed capture, or a
+        /// <c>gc-collect</c> / <c>gc-verbose</c> trace).
+        /// </summary>
+        /// <param name="traceFilePath">The .nettrace file.</param>
+        /// <param name="longPauseThreshold">Pauses at least this long are flagged as long.</param>
+        /// <param name="resolveTriggerStacks">Resolve who triggered each GC; needs a trace captured with stacks and rundown.</param>
+        public GcPauseDetailedReport ReportGcPauses(string traceFilePath, TimeSpan longPauseThreshold, bool resolveTriggerStacks = false)
+        {
+            if (string.IsNullOrEmpty(traceFilePath) || !File.Exists(traceFilePath))
+            {
+                throw new FileNotFoundException("Trace file not found.", traceFilePath);
+            }
+
+            GcPauseDetailedReport report = new()
+            {
+                TraceFilePath = Path.GetFullPath(traceFilePath),
+                TraceSizeInBytes = new FileInfo(traceFilePath).Length,
+            };
+            GcPauseDetailedCapture.Analyze(report, longPauseThreshold.TotalMilliseconds, new GcPauseDetailedCaptureOptions { CollectStacks = resolveTriggerStacks }, GetTextWriter());
+            return report;
         }
 
         /// <summary>

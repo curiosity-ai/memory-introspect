@@ -40,6 +40,7 @@ process id and returns a result object rather than throwing on failure — check
 | *Where* those allocations come from | Allocation call stacks | `CollectAllocationReportAsync(..., resolveCallStacks: true)` | `references/allocation-call-stacks.md` |
 | What the runtime is doing (GC, JIT, exceptions, contention, your own `EventSource`) | EventPipe trace | `CollectTraceAsync` | `references/trace-collect.md` |
 | What is on the heap right now, and what roots it | GC heap dump (`.gcdump`) | `CollectMemoryGraphAsync` | `references/gc-dump.md` |
+| Why the app froze: long GC pauses, explained as they happen | GC pause monitor | `StartGcPauseMonitorAsync` | `references/gc-pauses.md` |
 | Post-mortem state: threads, stacks, exceptions, native memory | Process dump (`.dmp`) | `DumpAsync` | `references/process-dump.md` |
 
 Rough cost ordering, cheapest first: `gc-collect` trace → CPU sampling → default trace →
@@ -124,6 +125,10 @@ await introspector.DumpAsync(pid, "app.dmp", Dumper.CollectionType.Mini);
 - `references/formats-and-conversion.md` — speedscope, Chromium/Perfetto, PerfView, VS.
 - `references/offline-reports.md` — running the same reports over `.nettrace` files you
   already have.
+
+**Watching a process**
+- `references/gc-pauses.md` — always-on detection of long GC pauses, the root-cause breakdown
+  (suspension, mark by root kind, plan/relocate/compact), and escalating to a detailed capture.
 
 **The other artifact types**
 - `references/gc-dump.md` — `.gcdump` heap graphs and leak hunting.
