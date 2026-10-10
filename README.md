@@ -262,6 +262,37 @@ Prefer short durations. `AllocationReport.HasCallStacks` tells you whether a giv
 carries them; asking a rundown-less trace for stacks yields unnamed `?` frames rather than an
 error.
 
+### Why did the app freeze? Monitoring GC pauses
+
+`StartGcPauseMonitorAsync` keeps a cheap EventPipe session open (GC events at Informational
+level, no stacks, no rundown) and explains every pause the moment it ends: how long threads took
+to stop, which GC ran and why, how long mark / plan / relocate / compact took, and which kind of
+root the marking went to. When a pause crosses the threshold it can escalate into a short
+detailed capture that records who triggered the GC (call stacks), what was being allocated and
+pinned, and optionally which types fill the heap.
+
+```csharp
+await using var monitor = await introspector.StartGcPauseMonitorAsync(Environment.ProcessId, new GcPauseMonitorOptions
+{
+    LongPauseThreshold = TimeSpan.FromMilliseconds(500),
+    OnLongPause        = pause => logger.LogWarning("{0}", pause.ToReport()),
+    DetailedCapture    = new() { OnReport = report => logger.LogWarning("{0}", report.ToReport()) },
+});
+```
+
+```
+8,027 ms pause: GC #61 gen2 NonConcurrentGC reason=InducedCompacting compacting+LOH -> cause: Compaction
+  phases: mark 1,849 ms (...), plan 195 ms, relocate 5,241 ms, compact 741 ms
+  mark by root: overflow 1,042 ms/67.7 MB, stack 806 ms/833.1 MB, handles 0.8 ms/2.0 MB
+  * The GC was induced (InducedCompacting): something called GC.Collect asking for a compacting collection ...
+  * The mark stack overflowed: 1,042 ms went into recovering from it ...
+```
+
+[`Memory.Introspect.GcPauseRepro`](Memory.Introspect.GcPauseRepro/) reproduces multi-second
+pauses (millions of interlinked objects plus a forced compacting `GC.Collect` on a timer) and
+checks every stall a heartbeat thread notices against what the monitor reported; its README has
+the measurements.
+
 ### Profiling a process from inside itself
 
 Every capture works against the current process — pass `Environment.ProcessId` and the library
@@ -350,7 +381,7 @@ its options, and worked examples. If the project referencing `Memory.Introspect`
     gc-dump.md                   process-dump.md             formats-and-conversion.md
     offline-reports.md           self-tracing.md             large-processes.md
     diagnostic-ports.md          diagnostics-endpoint.md     ci-and-tests.md
-    api-reference.md             troubleshooting.md
+    gc-pauses.md                 api-reference.md            troubleshooting.md
 ```
 
 There is nothing to configure. No `.claude` folder means the extraction does nothing, and the
