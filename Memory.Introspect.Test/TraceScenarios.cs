@@ -24,6 +24,7 @@ internal static class TraceScenarios
         await CollectUntilStoppingEventAsync(introspector, pid, outputDirectory, logger);
         await CollectWithLargeBuffersAsync(introspector, pid, outputDirectory, logger);
         await CollectCancelledAsync(introspector, pid, logger);
+        await CollectSamplingCancelledAsync(introspector, pid, logger);
         await CollectAllocationReportAsync(introspector, pid, outputDirectory, logger);
         await CollectAllocationCallStacksAsync(introspector, pid, outputDirectory, logger);
         await CollectSelfAllocationReportAsync(introspector, logger);
@@ -305,6 +306,25 @@ internal static class TraceScenarios
         Assert(result.Success, "a cancelled capture should still return the data collected so far");
         Assert(result.Elapsed < TimeSpan.FromSeconds(30), $"cancellation did not take effect (ran for {result.Elapsed})");
         logger.LogInformation("  cancelled after {0:0.##}s keeping {1:N0} bytes", result.Elapsed.TotalSeconds, result.TraceSizeInBytes);
+    }
+
+    // CollectSamplingProfileAsync used to keep reading the event stream with the cancelled token, so
+    // cancelling stopped the drain while the runtime was still flushing rundown: the stop never
+    // completed and, against the current process, its EventPipe thread hung for good. A hang is the
+    // failure, so the call is raced against a timeout instead of awaited bare.
+    private static async Task CollectSamplingCancelledAsync(MemoryIntrospector introspector, int pid, ILogger logger)
+    {
+        Section(logger, "sampling profile (cancelled mid-flight)");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        var capture = introspector.CollectSamplingProfileAsync(pid, TimeSpan.FromMinutes(5), cts.Token);
+        var finished = await Task.WhenAny(capture, Task.Delay(TimeSpan.FromSeconds(60)));
+
+        Assert(finished == capture, "a cancelled sampling capture did not return within 60s (stop deadlocked)");
+        var result = await capture;
+        Assert(result.Cancelled, "expected the result to be marked as cancelled");
+        Assert(result.Success, "a cancelled sampling capture should still return the data collected so far");
+        logger.LogInformation("  cancelled sampling kept {0:N0} bytes", result.TraceSizeInBytes);
     }
 
     // ---- per-type allocation report ------------------------------------------------------------

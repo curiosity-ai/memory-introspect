@@ -60,7 +60,11 @@ namespace Memory.Introspect.Trace
                 using var memoryStream = new MemoryStream();
                 using (session)
                 {
-                    Task copyTask = session.EventStream.CopyToAsync(memoryStream, cancellationToken);
+                    // Never the caller's token: the copy has to keep draining until the runtime closes the
+                    // stream. A cancelled copy stops reading while StopAsync is still asking the runtime to
+                    // flush its rundown into the socket, so the runtime blocks on a full pipe, the stop never
+                    // completes, and when the target is this very process its EventPipe thread hangs for good.
+                    Task copyTask = session.EventStream.CopyToAsync(memoryStream, CancellationToken.None);
 
                     try
                     {
