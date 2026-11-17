@@ -3,6 +3,7 @@
 **Programmatic `.gcdump`, `.dmp` and `.nettrace` capture for .NET applications.**
 
 [![Memory.Introspect](https://img.shields.io/nuget/v/Memory.Introspect.svg?style=flat-square)](https://www.nuget.org/packages/Memory.Introspect/)
+[![Memory.Introspect.Tool](https://img.shields.io/nuget/v/Memory.Introspect.Tool.svg?style=flat-square)](https://www.nuget.org/packages/Memory.Introspect.Tool/)
 
 `Memory.Introspect` is a lightweight C\# library that wraps the functionality of the official `dotnet-gcdump`, `dotnet-dump` and `dotnet-trace` tools. It allows developers to capture garbage collection (GC) dumps, process dumps and EventPipe traces directly from within their code, without needing to shell out to a CLI or manage external processes.
 
@@ -27,6 +28,30 @@ Memory.Introspect is available as a [NuGet package](https://www.nuget.org/packag
 ```bash
 dotnet add package Memory.Introspect
 ```
+
+-----
+
+## 🖥️ Command-line tool
+
+Everything the library does is also available interactively, in a terminal UI, as the `memory-introspect` .NET tool (requires the .NET 10 runtime or later):
+
+```bash
+dotnet tool install --global Memory.Introspect.Tool
+memory-introspect                        # pick a process in the UI
+memory-introspect --pid 1234 --output ./captures
+```
+
+| View | What it does |
+|---|---|
+| **Target** | Lists the .NET processes that publish a diagnostics endpoint, picks the one to inspect and the folder captures are written to. |
+| **Memory Dump** | `.gcdump` (managed heap graph) or a mini / heap / triage / full `.dmp`. |
+| **CPU Profile** | A sampling profile; shows the top methods by self or inclusive time and keeps the `.nettrace`. |
+| **Trace** | A `dotnet-trace collect` equivalent: profile, duration, buffer size, rundown, optional speedscope or Chromium output. |
+| **Allocations** | Which types were allocated, and with call stacks enabled, from where. |
+| **GC Pauses** | Watches for long GC pauses and explains each one; can escalate into a detailed capture. Cancel stops it. |
+| **Analyze** | Top methods, allocations or GC pauses of an existing `.nettrace`, and conversion to speedscope / Chromium. |
+
+Keys: `Tab` moves between controls, `F2` runs the current view, `F4` cancels it, `F10` quits. These are function keys on purpose, so they still work in a browser-based terminal (for example the EC2 Session Manager console), where `Ctrl+R`, `F5` and `Ctrl+Q` belong to the browser. Captures are written to the current folder unless `--output` says otherwise.
 
 -----
 
