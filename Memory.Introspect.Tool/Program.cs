@@ -16,7 +16,7 @@ const string USAGE = """
 
     Views: Target, Memory Dump (.gcdump / .dmp), CPU Profile, Trace (.nettrace),
     Allocations, GC Pauses and Analyze (reports on an existing .nettrace).
-    Keys: Tab moves between controls, Ctrl+R runs, F4 cancels, Ctrl+Q quits.
+    Keys: Tab moves between controls, F2 runs, F4 cancels, F10 quits.
     """;
 
 int?   pid    = null;

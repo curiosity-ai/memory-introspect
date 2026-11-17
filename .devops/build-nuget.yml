@@ -39,6 +39,14 @@ steps:
     includePreviewVersions: false
     installationPath: $(Agent.ToolsDirectory)/dotnet
 
+- task: UseDotNet@2
+  displayName: 'Use .NET 11.0 SDK (the tool also targets net11.0)'
+  inputs:
+    packageType: sdk
+    version: 11.x
+    includePreviewVersions: true
+    installationPath: $(Agent.ToolsDirectory)/dotnet
+
 - task: DotNetCoreCLI@2
   inputs:
     command: 'restore'

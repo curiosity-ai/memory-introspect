@@ -59,7 +59,7 @@ internal abstract class CapturePane : ToolPane
         _form.Width  = Dim.Fill();
         _form.Height = formHeight + 2;
 
-        _start  = ToolViews.Button(runText + " (Ctrl+R)", Run);
+        _start  = ToolViews.Button(runText + " (F2)", Run);
         _cancel = ToolViews.Button("Cancel (F4)", Cancel);
 
         _start.X  = 0;

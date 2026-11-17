@@ -54,9 +54,9 @@ internal sealed class ToolWindow : Window
         var statusBar = new StatusBar() { Y = Pos.AnchorEnd(1) };
 
         statusBar.Add(
-            new Shortcut() { Title = "Run",    Key = Key.R.WithCtrl, BindKeyToApplication = true, Action = () => _active?.Run() },
+            new Shortcut() { Title = "Run",    Key = Key.F2, BindKeyToApplication = true, Action = () => _active?.Run() },
             new Shortcut() { Title = "Cancel", Key = Key.F4, BindKeyToApplication = true, Action = () => _active?.Cancel() },
-            new Shortcut() { Title = "Quit",   Key = Key.Q.WithCtrl, BindKeyToApplication = true, Action = ConfirmQuit });
+            new Shortcut() { Title = "Quit",   Key = Key.F10, BindKeyToApplication = true, Action = ConfirmQuit });
 
         Add(_header, navigationFrame, statusBar);
 

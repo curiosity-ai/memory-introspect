@@ -51,7 +51,7 @@ memory-introspect --pid 1234 --output ./captures
 | **GC Pauses** | Watches for long GC pauses and explains each one; can escalate into a detailed capture. Cancel stops it. |
 | **Analyze** | Top methods, allocations or GC pauses of an existing `.nettrace`, and conversion to speedscope / Chromium. |
 
-Keys: `Tab` moves between controls, `Ctrl+R` runs the current view, `F4` cancels it, `Ctrl+Q` quits. Captures are written to the current folder unless `--output` says otherwise.
+Keys: `Tab` moves between controls, `F2` runs the current view, `F4` cancels it, `F10` quits. These are function keys on purpose, so they still work in a browser-based terminal (for example the EC2 Session Manager console), where `Ctrl+R`, `F5` and `Ctrl+Q` belong to the browser. Captures are written to the current folder unless `--output` says otherwise.
 
 -----
 
