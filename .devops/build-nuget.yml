@@ -1,5 +1,6 @@
 variables:
-  project:  './Memory.Introspect/Memory.Introspect.csproj'
+  project:     './Memory.Introspect/Memory.Introspect.csproj'
+  toolProject: './Memory.Introspect.Tool/Memory.Introspect.Tool.csproj'
   buildConfiguration: 'Release'
   targetVersion: yy.M.$(build.buildId)
 
@@ -41,19 +42,19 @@ steps:
 - task: DotNetCoreCLI@2
   inputs:
     command: 'restore'
-    projects: '$(project)'
+    projects: '$(project);$(toolProject)'
   displayName: 'restore nuget'
 
 - task: DotNetCoreCLI@2
   inputs:
     command: 'build'
-    projects: '$(project)'
+    projects: '$(project);$(toolProject)'
     arguments: '-c $(buildConfiguration) /p:Version=$(targetVersion) /p:LangVersion=latest'
 
 - task: DotNetCoreCLI@2
   inputs:
     command: 'pack'
-    packagesToPack: '$(project)'
+    packagesToPack: '$(project);$(toolProject)'
     versioningScheme: 'off'
     configuration: '$(buildConfiguration)'
     buildProperties: 'Version="$(targetVersion)";LangVersion="latest"'
@@ -66,3 +67,11 @@ steps:
     nuGetFeedType: 'external'
     publishFeedCredentials: 'nuget-curiosity-org'
   displayName: 'push nuget'
+
+- task: NuGetCommand@2
+  inputs:
+    command: 'push'
+    packagesToPush: '$(Build.ArtifactStagingDirectory)/Memory.Introspect.Tool.$(targetVersion).nupkg'
+    nuGetFeedType: 'external'
+    publishFeedCredentials: 'nuget-curiosity-org'
+  displayName: 'push tool nuget'
